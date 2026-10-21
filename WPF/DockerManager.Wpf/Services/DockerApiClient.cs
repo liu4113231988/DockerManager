@@ -25,9 +25,24 @@ public sealed class DockerApiClient
                           (endpoint.IsDefaultPort ? "" : $":{endpoint.Port}");
         var settings = new SshClientSettings(destination)
         {
-            HostAuthentication = async (result, info, token) =>
-                await _trustStore.VerifyAsync(endpoint.Host, endpoint.Port, result,
-                    info.ServerKey.Key.SHA256FingerPrint, token)
+            HostAuthentication = async (context, token) =>
+            {
+                // Tmds.Ssh 0.26.0 uses HostAuthenticationContext + CancellationToken.
+                // Prompt only for an interactive initial connection, never during rekey.
+                bool interactive = !context.IsNonInteractive;
+                if (interactive) context.SuspendConnectTimeout();
+                try
+                {
+                    return await _trustStore.VerifyAsync(
+                        endpoint.Host, endpoint.Port, context.KnownHostResult,
+                        context.ConnectionInfo.ServerKey.Key.SHA256FingerPrint,
+                        token, allowInteraction: interactive);
+                }
+                finally
+                {
+                    if (interactive) context.ResumeConnectTimeout();
+                }
+            }
         };
         var ssh = new SshClient(settings);
         try
