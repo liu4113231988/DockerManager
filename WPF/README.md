@@ -12,11 +12,19 @@ Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作�
 ## 连接要求
 
 - Docker SSH：远程主机需要 OpenSSH Server 和 Docker Engine；OpenSSH 必须允许 `direct-streamlocal` Unix Socket 访问。SSH 用户需对 `/var/run/docker.sock` 有权限，亦可自定义 Socket 路径。**该权限等价于高权限主机访问，务必使用可信账号**。
-- SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次使用需要由管理员预先验证服务器可信指纹。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
+- SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次连接陌生服务器时，程序显示主机 SHA256 指纹，要求用户通过服务器控制台或可信管理员独立核对，并明确选择是否信任。确认后的指纹保存在 `%APPDATA%\DockerManager\trusted-ssh-hosts.json`；以后自动校验。指纹变化、撤销或现有 OpenSSH known_hosts 发生冲突时均拒绝连接。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
 - Kubernetes：读取已存在的 kubeconfig（默认 `%USERPROFILE%\.kube\config`）。支持标准证书/Token 方式，**故意拒绝** `exec` / `auth-provider` 外部认证机制，避免暗中启动 `gcloud`、`aws` 等 CLI。也会拒绝 `insecure-skip-tls-verify`。其他复杂认证方案、组合多个 KUBECONFIG 文件还未支持。
 - 旧版 Docker Context 已停用：升级后请重新添加 `ssh://用户名@服务器[:端口]` 的 Docker SSH 连接。
 
 > 兼容性限制：旧 Linux 上 SSH 算法、服务器不允许 Unix Socket 转发、Docker Socket 权限、受限容器日志驱动、企业 K8s exec 认证都可能导致部分功能不可用。为安全起见，程序不会自动降低安全验证标准。
+
+
+### 首次连接出现 UntrustedPeer
+
+1. 新版程序首次连接未知主机时会提示 **服务器地址、端口和 SHA256 指纹**。这是 SSH 服务器身份校验，不是 Docker 错误。
+2. 请在服务器本地控制台（或通过独立可信的运维渠道）核对主机公钥，例如运行 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`。若 SSH 使用其他主机密钥类型，核对对应的 `.pub` 文件。
+3. **完全一致**再点“是”；不一致或无法核对则点“否”。已接受的指纹记录在 `%APPDATA%\DockerManager\trusted-ssh-hosts.json`；不会因连接失败自动忽略身份验证。
+4. 如果服务器重装后主机密钥确实发生变化，应经管理员核验后再手工维护可信记录及 `~/.ssh/known_hosts`，不要关闭指纹校验。
 
 ## 下载与运行
 
