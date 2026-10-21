@@ -1,0 +1,112 @@
+<Window x:Class="DockerManager.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DockerManager - 远程容器管理器" Width="1250" Height="810" MinWidth="920" MinHeight="590"
+        WindowStartupLocation="CenterScreen" Background="#F1F5F9" Closing="Window_Closing">
+  <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="60"/><RowDefinition Height="*"/><RowDefinition Height="34"/></Grid.RowDefinitions>
+    <Border Background="#0F172A" Grid.Row="0">
+      <DockPanel Margin="22,0">
+        <TextBlock Text="DockerManager" Foreground="White" FontSize="23" FontWeight="Bold" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+        <TextBlock Text="Docker  /  Compose  /  Kubernetes" Foreground="#CBD5E1" FontSize="13" VerticalAlignment="Center" Margin="20,2,0,0"/>
+      </DockPanel>
+    </Border>
+    <Grid Grid.Row="1" Margin="15">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="268"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Background="White" CornerRadius="9" Grid.Column="0" Padding="12">
+        <DockPanel LastChildFill="True">
+          <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="连接" FontSize="17" FontWeight="SemiBold" Margin="3,4,0,12"/>
+            <WrapPanel>
+              <Button Content="＋ 添加" Click="AddConnection_Click"/>
+              <Button Content="编辑" Click="EditConnection_Click"/>
+              <Button Content="删除" Click="DeleteConnection_Click"/>
+            </WrapPanel>
+          </StackPanel>
+          <ListBox x:Name="ConnectionList" SelectionChanged="ConnectionList_SelectionChanged" BorderThickness="0">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <StackPanel Margin="4,8,4,8">
+                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+                  <TextBlock Text="{Binding Subtitle}" Foreground="#64748B" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+      <Border Grid.Column="2" Background="White" CornerRadius="9" Padding="15">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
+            <RowDefinition Height="8"/><RowDefinition Height="230"/>
+          </Grid.RowDefinitions>
+          <StackPanel Grid.Row="0">
+            <DockPanel Margin="0,0,0,12">
+              <TextBlock x:Name="CurrentTitle" Text="请选择连接" FontSize="18" FontWeight="SemiBold" DockPanel.Dock="Left" VerticalAlignment="Center"/>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="测试连接" Click="TestConnection_Click"/>
+                <Button Content="刷新" Click="Refresh_Click"/>
+              </StackPanel>
+            </DockPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+              <Button x:Name="DockerModeButton" Content="Docker 容器" Click="DockerMode_Click"/>
+              <Button x:Name="ComposeModeButton" Content="Compose 项目" Click="ComposeMode_Click"/>
+              <Button x:Name="K8sModeButton" Content="K8s Pods" Click="K8sMode_Click"/>
+              <ComboBox x:Name="ProjectBox" Width="230" Visibility="Collapsed" SelectionChanged="ProjectBox_SelectionChanged" DisplayMemberPath="Name" Margin="12,0,0,0"/>
+            </StackPanel>
+          </StackPanel>
+          <DockPanel Grid.Row="1" Margin="0,0,0,9">
+            <TextBlock Text="筛选：" VerticalAlignment="Center" Margin="0,0,5,0" DockPanel.Dock="Left"/>
+            <TextBox x:Name="SearchBox" Width="260" TextChanged="SearchBox_TextChanged" DockPanel.Dock="Left" ToolTip="按名称、镜像、命名空间或项目搜索"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+              <Button x:Name="InspectButton" Content="详情" Click="Inspect_Click"/>
+              <Button x:Name="StartButton" Content="启动" Tag="start" Click="ContainerAction_Click"/>
+              <Button x:Name="StopButton" Content="停止" Tag="stop" Click="ContainerAction_Click"/>
+              <Button x:Name="RestartButton" Content="重启" Tag="restart" Click="ContainerAction_Click" Margin="0"/>
+            </StackPanel>
+          </DockPanel>
+          <DataGrid Grid.Row="2" x:Name="WorkloadsGrid" SelectionChanged="WorkloadsGrid_SelectionChanged" AutoGenerateColumns="False" IsReadOnly="True"
+                    CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single" SelectionUnit="FullRow"
+                    GridLinesVisibility="Horizontal" AlternatingRowBackground="#F8FAFC"
+                    BorderBrush="#CBD5E1" HeadersVisibility="Column">
+            <DataGrid.Columns>
+              <DataGridTextColumn Header="名称 / Pod" Binding="{Binding Name}" Width="2*"/>
+              <DataGridTextColumn Header="容器" Binding="{Binding Container}" Width="1.1*"/>
+              <DataGridTextColumn Header="命名空间" Binding="{Binding Namespace}" Width="1.0*"/>
+              <DataGridTextColumn Header="镜像" Binding="{Binding Image}" Width="1.8*"/>
+              <DataGridTextColumn Header="状态" Binding="{Binding State}" Width="0.8*"/>
+              <DataGridTextColumn Header="详情状态" Binding="{Binding Status}" Width="1.2*"/>
+              <DataGridTextColumn Header="Compose 项目" Binding="{Binding Project}" Width="1.1*"/>
+              <DataGridTextColumn Header="服务" Binding="{Binding Service}" Width="0.9*"/>
+            </DataGrid.Columns>
+          </DataGrid>
+          <GridSplitter Grid.Row="3" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="#E2E8F0"/>
+          <Grid Grid.Row="4">
+            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+            <DockPanel Margin="0,0,0,8">
+              <TextBlock Text="日志 / 详情" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock Text="最近行数" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBox x:Name="TailBox" Text="200" Width="62" Margin="0,0,8,0"/>
+                <CheckBox x:Name="FollowCheck" Content="实时跟踪" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                <Button x:Name="LogButton" Content="查看日志" Click="Logs_Click"/>
+                <Button Content="保存日志" Click="SaveLogs_Click"/>
+                <Button Content="清空" Click="ClearLogs_Click" Margin="0"/>
+              </StackPanel>
+            </DockPanel>
+            <TextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto" AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
+                     Background="#111827" Foreground="#D1FAE5" BorderThickness="0" Padding="10"/>
+          </Grid>
+        </Grid>
+      </Border>
+    </Grid>
+    <Border Grid.Row="2" Background="#E2E8F0" Padding="14,0">
+      <DockPanel>
+        <TextBlock x:Name="StatusBox" Text="添加连接后即可开始" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+        <TextBlock x:Name="CountBox" Text="0 项" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+      </DockPanel>
+    </Border>
+  </Grid>
+</Window>

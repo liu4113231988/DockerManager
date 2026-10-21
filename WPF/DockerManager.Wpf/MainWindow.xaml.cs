@@ -1,0 +1,336 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using DockerManager.Wpf.Models;
+using DockerManager.Wpf.Services;
+using DockerManager.Wpf.Views;
+using Microsoft.Win32;
+
+namespace DockerManager.Wpf;
+
+public partial class MainWindow : Window
+{
+    private readonly ProfileStore _store = new();
+    private readonly ContainerClient _client = new();
+    private readonly ObservableCollection<ConnectionProfile> _profiles = [];
+    private IReadOnlyList<WorkloadItem> _items = [];
+    private ViewKind _view = ViewKind.Docker;
+    private bool _loadingProjects;
+    private CancellationTokenSource? _activeRequest;
+    private CancellationTokenSource? _logCancellation;
+    private bool _followingLogs;
+
+    private ConnectionProfile? Profile => ConnectionList.SelectedItem as ConnectionProfile;
+    private WorkloadItem? Selected => WorkloadsGrid.SelectedItem as WorkloadItem;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        ConnectionList.ItemsSource = _profiles;
+        try
+        {
+            foreach (var connection in _store.Load()) _profiles.Add(connection);
+            if (_profiles.Count > 0) ConnectionList.SelectedIndex = 0;
+        }
+        catch (Exception ex)
+        {
+            ShowError("无法读取连接配置。原文件没有被自动覆盖。", ex);
+        }
+        UpdateModeUi();
+    }
+
+    private void SaveProfiles()
+    {
+        try { _store.Save(_profiles); }
+        catch (Exception ex) { ShowError("保存连接配置失败。", ex); }
+    }
+
+    private void AddConnection_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ConnectionDialog { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Profile is null) return;
+        _profiles.Add(dialog.Profile);
+        SaveProfiles();
+        ConnectionList.SelectedItem = dialog.Profile;
+    }
+
+    private void EditConnection_Click(object sender, RoutedEventArgs e)
+    {
+        if (Profile is not { } current) return;
+        var dialog = new ConnectionDialog(current) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Profile is null) return;
+        var index = _profiles.IndexOf(current);
+        _profiles[index] = dialog.Profile;
+        SaveProfiles();
+        ConnectionList.SelectedIndex = index;
+    }
+
+    private void DeleteConnection_Click(object sender, RoutedEventArgs e)
+    {
+        if (Profile is not { } profile) return;
+        if (MessageBox.Show(this, $"删除连接“{profile.Name}”？只删除本机配置，不影响远程服务。",
+            "删除连接", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        _profiles.Remove(profile);
+        SaveProfiles();
+    }
+
+    private async void ConnectionList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        StopLogs();
+        CancelRequest();
+        _view = Profile?.Kind == ConnectionKind.Kubernetes ? ViewKind.Kubernetes : ViewKind.Docker;
+        UpdateModeUi();
+        await RefreshAsync();
+    }
+
+    private async void DockerMode_Click(object sender, RoutedEventArgs e) { _view = ViewKind.Docker; UpdateModeUi(); await RefreshAsync(); }
+    private async void ComposeMode_Click(object sender, RoutedEventArgs e) { _view = ViewKind.Compose; UpdateModeUi(); await RefreshAsync(); }
+    private async void K8sMode_Click(object sender, RoutedEventArgs e) { _view = ViewKind.Kubernetes; UpdateModeUi(); await RefreshAsync(); }
+    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+
+    private void UpdateModeUi()
+    {
+        var profile = Profile;
+        CurrentTitle.Text = profile?.Name ?? "请选择连接";
+        bool docker = profile != null && profile.Kind != ConnectionKind.Kubernetes;
+        DockerModeButton.IsEnabled = docker;
+        ComposeModeButton.IsEnabled = docker;
+        K8sModeButton.IsEnabled = profile?.Kind == ConnectionKind.Kubernetes;
+        DockerModeButton.FontWeight = _view == ViewKind.Docker ? FontWeights.Bold : FontWeights.Normal;
+        ComposeModeButton.FontWeight = _view == ViewKind.Compose ? FontWeights.Bold : FontWeights.Normal;
+        K8sModeButton.FontWeight = _view == ViewKind.Kubernetes ? FontWeights.Bold : FontWeights.Normal;
+        ProjectBox.Visibility = _view == ViewKind.Compose && docker ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSelectionUi();
+    }
+
+    private CancellationToken StartRequest()
+    {
+        CancelRequest();
+        _activeRequest = new CancellationTokenSource();
+        return _activeRequest.Token;
+    }
+
+    private void CancelRequest()
+    {
+        _activeRequest?.Cancel();
+        _activeRequest = null;
+    }
+
+    private void WorkloadsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelectionUi();
+
+    private void UpdateSelectionUi()
+    {
+        var selected = Selected is not null && Profile is not null;
+        var canManageDocker = selected && Profile?.Kind != ConnectionKind.Kubernetes;
+        StartButton.IsEnabled = StopButton.IsEnabled = RestartButton.IsEnabled = canManageDocker;
+        InspectButton.IsEnabled = selected;
+        LogButton.IsEnabled = selected || _followingLogs;
+    }
+
+    private async Task RefreshAsync()
+    {
+        StopLogs();
+        var profile = Profile;
+        var selectedView = _view;
+        var ct = StartRequest();
+        _items = [];
+        ApplyFilter();
+        if (profile is null) { StatusBox.Text = "请添加一个连接"; return; }
+        StatusBox.Text = "正在连接及加载...";
+        try
+        {
+            if (selectedView == ViewKind.Compose)
+            {
+                var selectedProject = (ProjectBox.SelectedItem as ComposeProject)?.Name;
+                var projects = await _client.ComposeProjectsAsync(profile, ct);
+                ct.ThrowIfCancellationRequested();
+                _loadingProjects = true;
+                try
+                {
+                    ProjectBox.ItemsSource = projects;
+                    ProjectBox.SelectedItem = projects.FirstOrDefault(p => p.Name == selectedProject) ?? projects.FirstOrDefault();
+                }
+                finally { _loadingProjects = false; }
+                if (ProjectBox.SelectedItem is ComposeProject project)
+                    _items = await _client.ComposeContainersAsync(profile, project.Name, ct);
+            }
+            else if (selectedView == ViewKind.Kubernetes)
+                _items = await _client.PodsAsync(profile, ct);
+            else
+                _items = await _client.DockerContainersAsync(profile, ct);
+            ct.ThrowIfCancellationRequested();
+            if (Profile?.Id != profile.Id || _view != selectedView) return;
+            ApplyFilter();
+            StatusBox.Text = $"已连接：{profile.Name}";
+        }
+        catch (OperationCanceledException) { /* A newer selection took over. */ }
+        catch (Exception ex)
+        {
+            if (ct.IsCancellationRequested) return;
+            StatusBox.Text = "连接或加载失败";
+            ShowError("加载失败，请检查 CLI、远程连接和访问权限。", ex);
+        }
+    }
+
+    private async void ProjectBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingProjects || Profile is null || _view != ViewKind.Compose) return;
+        StopLogs();
+        if (ProjectBox.SelectedItem is not ComposeProject project) { _items = []; ApplyFilter(); return; }
+        var profile = Profile;
+        var ct = StartRequest();
+        StatusBox.Text = "正在加载 Compose 项目...";
+        try
+        {
+            var result = await _client.ComposeContainersAsync(profile, project.Name, ct);
+            ct.ThrowIfCancellationRequested();
+            if (Profile?.Id != profile.Id || _view != ViewKind.Compose) return;
+            _items = result;
+            ApplyFilter();
+            StatusBox.Text = $"Compose 项目：{project.Name}";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("加载 Compose 项目失败。", ex); }
+    }
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+
+    private void ApplyFilter()
+    {
+        var search = SearchBox?.Text.Trim() ?? "";
+        var selectedId = Selected?.Id;
+        var visible = string.IsNullOrWhiteSpace(search) ? _items : _items.Where(x =>
+            new[] { x.Name, x.Image, x.Namespace, x.Container, x.Project, x.Service, x.State }
+                .Any(v => v.Contains(search, StringComparison.OrdinalIgnoreCase))).ToList();
+        WorkloadsGrid.ItemsSource = visible;
+        CountBox.Text = $"{visible.Count} 项";
+        if (selectedId != null) WorkloadsGrid.SelectedItem = visible.FirstOrDefault(x => x.Id == selectedId);
+        UpdateSelectionUi();
+    }
+
+    private async void TestConnection_Click(object sender, RoutedEventArgs e)
+    {
+        if (Profile is not { } profile) return;
+        var ct = StartRequest();
+        StatusBox.Text = "正在测试连接...";
+        try
+        {
+            var result = await _client.TestAsync(profile, ct);
+            if (ct.IsCancellationRequested) return;
+            StatusBox.Text = "测试连接成功";
+            MessageBox.Show(this, "连接成功！\n" + result, "连接测试", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("连接测试失败。", ex); }
+    }
+
+    private async void ContainerAction_Click(object sender, RoutedEventArgs e)
+    {
+        if (Profile is not { } profile || Selected is not { } entry || sender is not Button button ||
+            button.Tag is not string action || profile.Kind == ConnectionKind.Kubernetes) return;
+        if (MessageBox.Show(this, $"确认对容器 {entry.Name} 执行 {button.Content}？", "容器操作",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+        var ct = StartRequest();
+        try
+        {
+            var result = await _client.ContainerActionAsync(profile, entry, action, ct);
+            result.ThrowOnFailure("docker " + action);
+            if (ct.IsCancellationRequested) return;
+            StatusBox.Text = "操作成功：" + entry.Name;
+            await RefreshAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("容器操作失败。", ex); }
+    }
+
+    private async void Inspect_Click(object sender, RoutedEventArgs e)
+    {
+        if (Profile is not { } profile || Selected is not { } entry) return;
+        StopLogs();
+        var ct = StartRequest();
+        try
+        {
+            var result = await _client.InspectAsync(profile, entry, ct);
+            result.ThrowOnFailure("inspect");
+            if (ct.IsCancellationRequested) return;
+            LogBox.Text = result.Output;
+            LogBox.ScrollToHome();
+            StatusBox.Text = "已读取详情：" + entry.Name;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("获取详情失败。", ex); }
+    }
+
+    private async void Logs_Click(object sender, RoutedEventArgs e)
+    {
+        if (_followingLogs) { StopLogs(); return; }
+        if (Profile is not { } profile || Selected is not { } entry) return;
+        if (!int.TryParse(TailBox.Text, out var tail) || tail < 1 || tail > 100000)
+        {
+            MessageBox.Show(this, "日志行数请输入 1～100000 之间的整数。", "日志参数");
+            return;
+        }
+        StopLogs();
+        var source = new CancellationTokenSource();
+        _logCancellation = source;
+        _followingLogs = true;
+        LogButton.Content = "停止日志";
+        LogBox.Clear();
+        StatusBox.Text = $"正在读取日志：{entry.Name}";
+        try
+        {
+            await _client.StreamLogsAsync(profile, entry, tail, FollowCheck.IsChecked == true,
+                line => Dispatcher.BeginInvoke(() => AppendLog(line + Environment.NewLine)), source.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            if (!source.IsCancellationRequested) AppendLog("[错误] " + ex.Message + Environment.NewLine);
+        }
+        finally
+        {
+            if (ReferenceEquals(_logCancellation, source))
+            {
+                _logCancellation = null;
+                _followingLogs = false;
+                LogButton.Content = "查看日志";
+                UpdateSelectionUi();
+            }
+            source.Dispose();
+        }
+    }
+
+    private void AppendLog(string text)
+    {
+        // Keep the UI responsive when a container produces a large continuous log.
+        if (LogBox.Text.Length > 500_000) LogBox.Text = LogBox.Text[^350_000..];
+        LogBox.AppendText(text);
+        LogBox.ScrollToEnd();
+    }
+
+    private void StopLogs()
+    {
+        _logCancellation?.Cancel();
+        _followingLogs = false;
+        LogButton.Content = "查看日志";
+        UpdateSelectionUi();
+    }
+
+    private void SaveLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog { Filter = "日志文件 (*.log)|*.log|文本文件 (*.txt)|*.txt", FileName = "container.log" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { File.WriteAllText(dialog.FileName, LogBox.Text); StatusBox.Text = "已保存日志"; }
+        catch (Exception ex) { ShowError("日志保存失败。", ex); }
+    }
+
+    private void ClearLogs_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
+    private void Window_Closing(object? sender, CancelEventArgs e) { StopLogs(); CancelRequest(); }
+
+    private void ShowError(string title, Exception ex)
+    {
+        MessageBox.Show(this, title + "\n\n" + ex.Message, "DockerManager", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+}

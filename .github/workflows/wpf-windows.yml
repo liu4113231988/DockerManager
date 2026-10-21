@@ -1,0 +1,31 @@
+name: WPF Windows Build
+on:
+  push:
+    paths:
+      - 'WPF/**'
+      - '.github/workflows/wpf-windows.yml'
+  pull_request:
+    paths:
+      - 'WPF/**'
+      - '.github/workflows/wpf-windows.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build WPF
+        run: dotnet build WPF/DockerManager.Wpf/DockerManager.Wpf.csproj -c Release
+      - name: Smoke tests
+        run: dotnet run --project WPF/DockerManager.Tests/DockerManager.Tests.csproj -c Release
+      - name: Publish self-contained executable
+        run: dotnet publish WPF/DockerManager.Wpf/DockerManager.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:PublishTrimmed=false -o WPF/release/win-x64
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: DockerManager-win-x64
+          path: WPF/release/win-x64/DockerManager.exe
