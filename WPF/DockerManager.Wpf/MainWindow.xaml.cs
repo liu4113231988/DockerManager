@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _client.ConfirmNewHostKey = ConfirmNewHostKeyAsync;
         ConnectionList.ItemsSource = _profiles;
         try
         {
@@ -39,6 +40,23 @@ public partial class MainWindow : Window
             ShowError("无法读取连接配置。原文件没有被自动覆盖。", ex);
         }
         UpdateModeUi();
+    }
+
+    private async Task<bool> ConfirmNewHostKeyAsync(string host, int port, string fingerprint, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var dialog = Dispatcher.InvokeAsync(() => MessageBox.Show(
+            this,
+            $"首次连接到 SSH 服务器：{host}:{port}\n\n" +
+            $"服务器公钥 SHA256 指纹：\n{fingerprint}\n\n" +
+            "必须先从服务器控制台或管理员提供的可信渠道，独立核对此指纹。\n" +
+            "可在 Linux 服务器控制台运行：\n" +
+            "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n" +
+            "（如果使用其他主机密钥类型，应核对相应 .pub 文件。）\n\n" +
+            "核对完全一致后，是否信任并保存此服务器指纹？\n" +
+            "如果不一致或者无法核对，请选择“否”。",
+            "确认服务器 SSH 指纹", MessageBoxButton.YesNo, MessageBoxImage.Warning));
+        return await dialog.Task.WaitAsync(ct) == MessageBoxResult.Yes;
     }
 
     private void SaveProfiles()
