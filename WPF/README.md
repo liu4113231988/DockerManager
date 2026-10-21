@@ -1,77 +1,51 @@
-# DockerManager WPF — Windows 远程容器管理器
+# DockerManager WPF（免 CLI 版）
 
-用 **C# / WPF / .NET 10** 编写的桌面应用，不需要 Python、pip 或 Docker Desktop 图形界面。
+Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作直接通过 API 完成，不运行 `docker.exe`、`kubectl.exe`、`ssh.exe`，也不需要在远程 Linux 上安装管理 Agent。Windows 自包含发布后不需要另外安装 .NET Runtime。
 
-## 功能
+## 主要功能
 
-- **Docker**：连接远端 Docker Engine（`ssh://user@host` 或已有 Docker Context），查看全部容器、运行状态、镜像、详情；启动、停止、重启容器。
-- **Docker Compose**：基于 Docker Engine 的 `com.docker.compose.project`、`com.docker.compose.service` 标签自动识别项目，查看每个项目下的容器、日志、详情，并进行**容器级**操作。不依赖本地 Compose YAML，也无需在远端额外部署 Agent；当前版本**不支持**整项目 `up/down`。
-- **Kubernetes**：使用本机 kubeconfig/context 访问集群，列出所有命名空间的 Pod/容器，查看每个容器的日志、Pod 的 JSON 详情；此版本不执行 K8s 工作负载写操作。
-- **通用**：保存多个连接、切换连接、筛选、读取最近 N 行日志、实时跟踪日志、停止跟踪、导出日志。
+- Docker：SSH 隧道访问远程 Linux 的 Unix Socket，再通过 Docker Engine HTTP API 查询容器、镜像、运行状态、详情、启停/重启、最近 N 行日志及持续跟踪日志。
+- Docker Compose：直接读取 Engine 容器的 `com.docker.compose.project` / `.service` 标签，对容器按项目分组；支持项目中的容器级操作。**不执行 `compose up/down`**。
+- Kubernetes：官方 `KubernetesClient` 从 kubeconfig 读取当前或指定 context，列举所有 namespace 的 Pod/容器、Pod JSON 详情、流式日志；不执行工作负载写操作。
+- 通用：多连接、本地搜索、日志导出、自动取消上一批请求、日志长度限制。
 
-## 环境要求
+## 连接要求
 
-- Windows 10/11 x64，或 Windows ARM64（在对应架构发布）。
-- 开发或本地构建：**.NET 10 SDK**，在 Windows 上构建 WPF。
-- 使用自包含 EXE 时：**不需要额外安装 .NET 运行时**。
-- 管理 Docker 时：需要 **Docker CLI** (`docker.exe`) 与 **OpenSSH Client** (`ssh.exe`) 能在 PATH 中运行；Docker CLI 可以来自 Docker Desktop 或独立安装。
-- 管理 K8s 时：需要 **kubectl.exe** 在 PATH 中运行以及有效的 kubeconfig。
-- Docker 远端须运行 Docker Engine，且远程 SSH 账号有 Docker socket 访问权限。
+- Docker SSH：远程主机需要 OpenSSH Server 和 Docker Engine；OpenSSH 必须允许 `direct-streamlocal` Unix Socket 访问。SSH 用户需对 `/var/run/docker.sock` 有权限，亦可自定义 Socket 路径。**该权限等价于高权限主机访问，务必使用可信账号**。
+- SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次使用需要由管理员预先验证服务器可信指纹。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
+- Kubernetes：读取已存在的 kubeconfig（默认 `%USERPROFILE%\.kube\config`）。支持标准证书/Token 方式，**故意拒绝** `exec` / `auth-provider` 外部认证机制，避免暗中启动 `gcloud`、`aws` 等 CLI。也会拒绝 `insecure-skip-tls-verify`。其他复杂认证方案、组合多个 KUBECONFIG 文件还未支持。
+- 旧版 Docker Context 已停用：升级后请重新添加 `ssh://用户名@服务器[:端口]` 的 Docker SSH 连接。
 
-> 本应用不会在配置中保存密码、私钥或 kubeconfig 内容。`%APPDATA%\DockerManager\connections.json` 只保存连接的显示名称、主机 URI、上下文和文件路径；请保护你的 SSH 私钥与 kubeconfig。不要开放未经 TLS 验证的 Docker TCP 2375 端口。
+> 兼容性限制：旧 Linux 上 SSH 算法、服务器不允许 Unix Socket 转发、Docker Socket 权限、受限容器日志驱动、企业 K8s exec 认证都可能导致部分功能不可用。为安全起见，程序不会自动降低安全验证标准。
 
-## 直接运行源码（Windows）
+## 下载与运行
 
-安装 .NET 10 SDK，然后在 `WPF` 文件夹中执行：
+GitHub Actions 工作流 `WPF Windows Build` 在 Windows 上运行编译、基础测试，并发布自包含单文件 EXE 构建附件。成功后在 Actions 的对应运行记录中下载 `DockerManager-win-x64`；解压运行 `DockerManager.exe`。
+
+开发环境需要 **Windows + .NET 10 SDK**：
 
 ```powershell
 dotnet run --project .\DockerManager.Wpf\DockerManager.Wpf.csproj
 ```
 
-或运行 `WPF\scripts\build.ps1` 完成构建和基础测试。
-
-## 生成独立 EXE（Windows）
-
-双击 `WPF\scripts\publish-win-x64.bat`，或执行：
+或发布：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-win-x64.ps1
+.\scripts\publish-win-x64.bat
 ```
 
-生成到 `WPF\release\win-x64\DockerManager.exe`。这是自包含单文件发布，不依赖系统的 .NET Runtime，但仍需 Docker CLI / kubectl 和连接所需的 SSH 认证。
+也支持在 `WPF` 目录运行 `dotnet run --project .\DockerManager.Tests\DockerManager.Tests.csproj` 执行基础测试。
 
-GitHub Actions 也配置了 Windows 构建 + 发布，运行成功后可在 workflow 的 **Artifacts** 中下载 EXE。
+## 测试建议
 
-## 快速配置 Docker SSH
+1. 用非管理员 Windows，确认在没有 Docker、kubectl、OpenSSH CLI 的机器上启动并连接。
+2. 在受信任 Linux 上准备有权访问 Docker Socket 的 SSH 用户，验证容器列表和 Compose 分组。
+3. 同时测试 TTY / 非 TTY 容器日志，以及取消持续跟踪。
+4. 使用证书或 Token kubeconfig 验证 Pod 列表、详情、日志；使用 exec 插件 kubeconfig 验证清晰的拒绝提示。
+5. 使用不同 Docker Engine / Kubernetes API Server 版本确认兼容性。
 
-先在 Windows PowerShell 验证 SSH 非交互登录，然后验证 Docker CLI：
+## 安全与状态
 
-```powershell
-ssh user@my-server 'docker ps'
-docker --host ssh://user@my-server ps -a
-```
+`%APPDATA%\DockerManager\connections.json` 仅保存主机地址、context 与 kubeconfig **路径**，不会主动存储密钥或 Token。该路径及对应权限仍是敏感信息，需要保护。Docker API 调用与 SSH 连接由托管库完成，日志跟踪采用取消令牌控制。
 
-建议先在 Windows 的 `~/.ssh/config` 中配置服务器别名、密钥路径和 `BatchMode yes`，并将服务器公钥可信指纹加入已知主机。首次 SSH 主机验证应在终端完成，避免图形程序里隐藏的交互提示造成命令卡住。
-
-在应用中点 **添加**，选择 `Docker SSH` 并填写 `ssh://user@my-server`。应用通过 `docker --host ssh://...` 访问，不会把服务器的 Docker socket 暴露到公网。
-
-如已有 Docker Context，可以直接选择 `Docker Context`，输入 `docker context ls` 显示的名称。
-
-## 快速配置 Kubernetes
-
-先确认 kubectl 可连接：
-
-```powershell
-kubectl config get-contexts
-kubectl --context your-context get pods -A
-```
-
-在应用中新增 `Kubernetes` 连接，输入 context 名称（留空使用当前 context）及可选的 kubeconfig 路径；需要对应集群的 RBAC 读取权限。
-
-## 注意事项
-
-1. 在本地删除一个“连接”只删除本地配置，不会删除 Docker 容器或 Kubernetes 资源。
-2. Docker/Compose 停止、启动、重启的是**当前选中的单个容器**，不是整个 Compose 项目。
-3. 当前日志窗口最多保留最近约 500,000 字符，以防实时高频日志使程序占用过多内存。
-4. Docker SSH 推荐密钥认证；本程序不保存和输入 SSH 密码。密码式认证可能在 GUI 中挂起直到超时。
-5. 本源码创建环境为 Linux，**无法在当前环境直接运行或验证 Windows WPF 桌面 UI**；Windows GitHub Actions 工作流和本地 Windows 构建脚本提供编译与冒烟测试途径。
+**状态：可供 Windows 构建及测试的 MVP；本地代码是在非 Windows 环境中生成，尚未完成 Windows 实机与真实集群的端到端验证。**

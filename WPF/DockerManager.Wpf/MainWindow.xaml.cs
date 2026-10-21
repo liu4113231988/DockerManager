@@ -170,7 +170,7 @@ public partial class MainWindow : Window
         {
             if (ct.IsCancellationRequested) return;
             StatusBox.Text = "连接或加载失败";
-            ShowError("加载失败，请检查 CLI、远程连接和访问权限。", ex);
+            ShowError("加载失败，请检查 SSH 主机指纹、Docker Socket 权限或 K8s 认证。", ex);
         }
     }
 
@@ -200,13 +200,13 @@ public partial class MainWindow : Window
     private void ApplyFilter()
     {
         var search = SearchBox?.Text.Trim() ?? "";
-        var selectedId = Selected?.Id;
+        var selectedId = Selected is { } prior ? (prior.Id, prior.Namespace, prior.Container) : ((string, string, string)?)null;
         var visible = string.IsNullOrWhiteSpace(search) ? _items : _items.Where(x =>
             new[] { x.Name, x.Image, x.Namespace, x.Container, x.Project, x.Service, x.State }
                 .Any(v => v.Contains(search, StringComparison.OrdinalIgnoreCase))).ToList();
         WorkloadsGrid.ItemsSource = visible;
         CountBox.Text = $"{visible.Count} 项";
-        if (selectedId != null) WorkloadsGrid.SelectedItem = visible.FirstOrDefault(x => x.Id == selectedId);
+        if (selectedId != null) WorkloadsGrid.SelectedItem = visible.FirstOrDefault(x => (x.Id, x.Namespace, x.Container) == selectedId.Value);
         UpdateSelectionUi();
     }
 
@@ -235,8 +235,7 @@ public partial class MainWindow : Window
         var ct = StartRequest();
         try
         {
-            var result = await _client.ContainerActionAsync(profile, entry, action, ct);
-            result.ThrowOnFailure("docker " + action);
+            await _client.ContainerActionAsync(profile, entry, action, ct);
             if (ct.IsCancellationRequested) return;
             StatusBox.Text = "操作成功：" + entry.Name;
             await RefreshAsync();
@@ -252,10 +251,9 @@ public partial class MainWindow : Window
         var ct = StartRequest();
         try
         {
-            var result = await _client.InspectAsync(profile, entry, ct);
-            result.ThrowOnFailure("inspect");
+            var detail = await _client.InspectAsync(profile, entry, ct);
             if (ct.IsCancellationRequested) return;
-            LogBox.Text = result.Output;
+            LogBox.Text = detail;
             LogBox.ScrollToHome();
             StatusBox.Text = "已读取详情：" + entry.Name;
         }

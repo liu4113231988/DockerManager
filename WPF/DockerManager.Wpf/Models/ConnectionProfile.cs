@@ -18,12 +18,13 @@ public sealed class ConnectionProfile
     public string DockerHost { get; set; } = "";
     public string Context { get; set; } = "";
     public string Kubeconfig { get; set; } = "";
+    public string DockerSocketPath { get; set; } = "/var/run/docker.sock";
 
     [JsonIgnore]
     public string Subtitle => Kind switch
     {
         ConnectionKind.DockerSsh => "Docker SSH · " + DockerHost,
-        ConnectionKind.DockerContext => "Docker Context · " + Context,
+        ConnectionKind.DockerContext => "旧版 Context（需迁移） · " + Context,
         _ => "Kubernetes · " + (string.IsNullOrWhiteSpace(Context) ? "当前上下文" : Context)
     };
 

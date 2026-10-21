@@ -9,4 +9,9 @@
     <RootNamespace>DockerManager.Wpf</RootNamespace>
     <ApplicationIcon Condition="Exists('Resources\DockerManager.ico')">Resources\DockerManager.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Tmds.Ssh" Version="0.26.0" />
+    <PackageReference Include="KubernetesClient" Version="21.0.8" />
+    <PackageReference Include="YamlDotNet" Version="18.0.0" />
+  </ItemGroup>
 </Project>

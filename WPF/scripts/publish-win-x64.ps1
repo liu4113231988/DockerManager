@@ -9,4 +9,4 @@ dotnet publish $project -c Release -r $Runtime --self-contained true `
   -p:PublishTrimmed=false -o $output
 if ($LASTEXITCODE -ne 0) { throw '发布失败，确认已安装 .NET 10 SDK。' }
 Write-Host "输出文件：$output\DockerManager.exe"
-Write-Host '注意：EXE 已内置 .NET 运行时；仍需在本机安装 docker CLI / kubectl 并配置 SSH。'
+Write-Host '注意：EXE 内置 .NET 运行时，且不依赖 docker.exe / kubectl.exe / ssh.exe；需要可用 SSH 密钥和 K8s kubeconfig。'

@@ -16,7 +16,7 @@ public partial class ConnectionDialog : Window
         NameBox.Text = existing.Name;
         KindBox.SelectedIndex = (int)existing.Kind;
         TargetBox.Text = existing.Kind == ConnectionKind.DockerSsh ? existing.DockerHost : existing.Context;
-        ConfigBox.Text = existing.Kubeconfig;
+        ConfigBox.Text = existing.Kind == ConnectionKind.Kubernetes ? existing.Kubeconfig : existing.DockerSocketPath;
         Profile = existing;
     }
 
@@ -28,16 +28,22 @@ public partial class ConnectionDialog : Window
             case 0:
                 TargetLabel.Text = "SSH 地址（ssh://user@host[:port]）";
                 TargetBox.Text = "ssh://user@192.168.1.100";
-                ConfigBox.IsEnabled = false;
+                ConfigLabel.Text = "远端 Docker Socket 路径";
+                ConfigBox.Text = "/var/run/docker.sock";
+                ConfigBox.IsEnabled = true;
                 break;
             case 1:
                 TargetLabel.Text = "Docker Context 名称（docker context ls）";
                 TargetBox.Text = "";
+                ConfigLabel.Text = "此模式已经停止维护";
+                ConfigBox.Text = "";
                 ConfigBox.IsEnabled = false;
                 break;
             case 2:
                 TargetLabel.Text = "Kubernetes Context 名称（留空使用当前上下文）";
                 TargetBox.Text = "";
+                ConfigLabel.Text = "kubeconfig 文件路径（留空为 ~/.kube/config）";
+                ConfigBox.Text = "";
                 ConfigBox.IsEnabled = true;
                 break;
         }
@@ -53,6 +59,11 @@ public partial class ConnectionDialog : Window
             MessageBox.Show(this, "连接名称和必要的目标地址不能为空。", "连接配置");
             return;
         }
+        if (kind == ConnectionKind.DockerContext)
+        {
+            MessageBox.Show(this, "旧版 Docker Context 依赖 docker.exe，请重新添加 Docker SSH 连接。", "连接配置");
+            return;
+        }
         if (kind == ConnectionKind.DockerSsh &&
             (!Uri.TryCreate(target, UriKind.Absolute, out var uri) || uri.Scheme != "ssh" || string.IsNullOrEmpty(uri.Host)
              || (uri.UserInfo?.Contains(':') ?? false)))
@@ -65,7 +76,8 @@ public partial class ConnectionDialog : Window
             Id = Profile?.Id ?? Guid.NewGuid(), Name = name, Kind = kind,
             DockerHost = kind == ConnectionKind.DockerSsh ? target : "",
             Context = kind == ConnectionKind.DockerSsh ? "" : target,
-            Kubeconfig = kind == ConnectionKind.Kubernetes ? ConfigBox.Text.Trim() : ""
+            Kubeconfig = kind == ConnectionKind.Kubernetes ? ConfigBox.Text.Trim() : "",
+            DockerSocketPath = kind == ConnectionKind.DockerSsh ? ConfigBox.Text.Trim() : "/var/run/docker.sock"
         };
         DialogResult = true;
     }

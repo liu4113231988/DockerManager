@@ -1,12 +1,13 @@
 # 安全说明
 
-此项目通过本机 Docker CLI、OpenSSH 和 kubectl 连接远程环境，不需要开放 Docker 2375 明文端口。
+DockerManager WPF 通过本地 Docker CLI、OpenSSH 与 kubectl 连接远程系统，不需要开放无认证的 Docker TCP 2375 端口，也不需要在远程部署 Agent。
 
-- 不要提交 kubeconfig、私钥、密码、访问令牌或日志中的敏感信息。`.gitignore` 仅防止部分常见文件名误提交，提交前仍需人工检查。
-- Docker Socket 权限通常具有宿主机级别的高权限。请使用受信任的管理员账号，并只连接得到授权的服务器。
-- Kubernetes 推荐使用最小权限的 kubeconfig / RBAC；避免把集群管理员凭证复制到桌面客户端。
-- 首次 SSH 连接应独立确认主机指纹，不要禁用主机密钥检查。
-- 容器日志和资源详情可能包含敏感信息；导出前请检查并妥善保存。
-- 本项目为 MVP，尚未进行真实环境的完整安全审计和端到端测试，不建议直接用于关键生产变更。
+- **凭据**：本应用只保存显示名称、Docker SSH URI、Docker/K8s Context 和 kubeconfig 路径；不保存密码、私钥或 kubeconfig 内容。配置位于 `%APPDATA%\DockerManager\connections.json`。
+- **主机密钥**：首次连接时先通过交互终端验证 SSH 主机指纹，不要禁用 StrictHostKeyChecking。
+- **访问权限**：拥有 Docker socket 的用户通常对远程主机有很高的操作权限；K8s 凭据应启用最小权限 RBAC。
+- **日志**：日志与详情可能含有敏感信息；导出时请注意文件存放位置，不要公开分享。
+- **命令执行**：程序通过 `ProcessStartInfo.ArgumentList` 调用 Docker/kubectl，不通过 shell 执行用户输入。
+- **发布**：任何从 GitHub Actions 下载的 EXE 都应确认来自你授权的仓库和构建工作流。
+- **测试状态**：WPF 版属于 MVP，当前尚未通过真实 Windows 远程环境的端到端测试，不建议未经验证直接操作关键生产服务。
 
-若发现安全问题，请不要在公开 issue 里粘贴凭据或服务器地址。
+如发现安全问题，请不要在公开 issue 中粘贴密钥或真实服务器凭据。

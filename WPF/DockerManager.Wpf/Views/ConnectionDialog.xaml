@@ -1,7 +1,7 @@
 <Window x:Class="DockerManager.Wpf.Views.ConnectionDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="添加连接" Width="525" Height="465" WindowStartupLocation="CenterOwner"
+        Title="添加连接" Width="525" Height="480" WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize" Background="#F8FAFC">
   <Grid Margin="24">
     <Grid.RowDefinitions>
@@ -11,7 +11,7 @@
     </Grid.RowDefinitions>
     <StackPanel Grid.Row="0" Margin="0,0,0,14">
       <TextBlock Text="新建远程连接" FontSize="21" FontWeight="SemiBold"/>
-      <TextBlock Text="只保存连接名称和地址，不保存密码或密钥。" Foreground="#64748B" Margin="0,5,0,0"/>
+      <TextBlock Text="无需安装 docker.exe / kubectl.exe / ssh.exe；不保存密码或密钥。" Foreground="#64748B" Margin="0,5,0,0"/>
     </StackPanel>
     <StackPanel Grid.Row="1" Margin="0,0,0,12">
       <TextBlock Text="连接名称" Margin="0,0,0,5"/>
@@ -21,7 +21,7 @@
       <TextBlock Text="连接类型" Margin="0,0,0,5"/>
       <ComboBox x:Name="KindBox" SelectionChanged="KindBox_SelectionChanged" SelectedIndex="0">
         <ComboBoxItem Content="Docker SSH（推荐远程 Linux）"/>
-        <ComboBoxItem Content="Docker Context（已配置上下文）"/>
+        <ComboBoxItem Content="旧版 Docker Context（已弃用，请改用 SSH）" IsEnabled="False"/>
         <ComboBoxItem Content="Kubernetes（kubeconfig）"/>
       </ComboBox>
     </StackPanel>
@@ -30,10 +30,10 @@
       <TextBox x:Name="TargetBox" Text="ssh://user@192.168.1.100"/>
     </StackPanel>
     <StackPanel Grid.Row="4" Margin="0,0,0,12">
-      <TextBlock x:Name="ConfigLabel" Text="kubeconfig 路径（可选）" Margin="0,0,0,5"/>
-      <TextBox x:Name="ConfigBox" IsEnabled="False" Text=""/>
+      <TextBlock x:Name="ConfigLabel" Text="远端 Docker Socket 路径" Margin="0,0,0,5"/>
+      <TextBox x:Name="ConfigBox" Text="/var/run/docker.sock"/>
     </StackPanel>
-    <TextBlock Grid.Row="5" Text="提示：远程 Docker 需要本机 docker CLI、OpenSSH 和服务器端 Docker 权限。K8s 需要 kubectl。"
+    <TextBlock Grid.Row="5" Text="提示：SSH 使用本机 ~/.ssh 密钥与 known_hosts，服务器 SSH 必须允许 Unix Socket 转发；K8s 支持证书/Token，不执行外部认证命令。"
                Foreground="#64748B" TextWrapping="Wrap"/>
     <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
       <Button Content="取消" Width="90" Click="Cancel_Click"/>
