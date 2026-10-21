@@ -83,10 +83,29 @@ users:
         throw new Exception("exec authentication must be rejected");
     }
     catch (NotSupportedException) { Console.WriteLine("PASS reject external authentication executable"); }
-    var safe = File.ReadAllText(path).Replace("      exec:\n        command: untrusted.exe", "      token: fake-test-token");
-    File.WriteAllText(path, safe);
-    KubernetesApiClient.ValidateNoExternalCredentials(path, "demo");
-    Console.WriteLine("PASS direct token configuration is allowed");
+    // Test each format independently: source raw strings can contain CRLF on Windows.
+    // Never rely on replacing a line within another fixture.
+    const string tokenConfig = """
+apiVersion: v1
+kind: Config
+current-context: demo
+contexts:
+  - name: demo
+    context:
+      cluster: remote
+      user: demo-user
+users:
+  - name: demo-user
+    user:
+      token: fake-test-token
+""";
+    foreach (var newline in new[] { "\n", "\r\n" })
+    {
+        var normalized = tokenConfig.Replace("\r\n", "\n").Replace("\n", newline);
+        File.WriteAllText(path, normalized);
+        KubernetesApiClient.ValidateNoExternalCredentials(path, "demo");
+        Console.WriteLine($"PASS direct token configuration with {(newline == "\n" ? "LF" : "CRLF")} newlines");
+    }
 }
 finally { File.Delete(path); }
 
