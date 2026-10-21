@@ -42,7 +42,7 @@ public sealed class SshHostTrustStore
     }
 
     public async Task<bool> VerifyAsync(string host, int port, KnownHostResult result,
-        string fingerprint, CancellationToken ct)
+        string fingerprint, CancellationToken ct, bool allowInteraction = true)
     {
         // Never override a revoked or changed known_hosts entry with a UI confirmation.
         if (result is KnownHostResult.Changed or KnownHostResult.Revoked) return false;
@@ -70,7 +70,7 @@ public sealed class SshHostTrustStore
                 return true;
             }
 
-            if (result != KnownHostResult.Unknown || ConfirmNewHostKey is null) return false;
+            if (result != KnownHostResult.Unknown || !allowInteraction || ConfirmNewHostKey is null) return false;
             if (!await ConfirmNewHostKey(host, port, "SHA256:" + fingerprint, ct)) return false;
             ct.ThrowIfCancellationRequested();
             hosts[key] = fingerprint;
