@@ -109,4 +109,38 @@ users:
 }
 finally { File.Delete(path); }
 
+// Host-key trust: first connection prompts, subsequent connections use a persistent pin.
+var trustFile = Path.Combine(Path.GetTempPath(), $"dockermanager-trust-{Guid.NewGuid():N}.json");
+try
+{
+    var trusted = new SshHostTrustStore(trustFile);
+    var confirmations = 0;
+    trusted.ConfirmNewHostKey = (_, _, fingerprint, _) =>
+    {
+        Expect(fingerprint == "SHA256:initial-key", "dialog displays complete fingerprint");
+        confirmations++;
+        return Task.FromResult(true);
+    };
+    Expect(await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
+        "initial-key", CancellationToken.None), "first use is explicitly accepted");
+
+    var reloaded = new SshHostTrustStore(trustFile);
+    Expect(await reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
+        "initial-key", CancellationToken.None), "saved host key persists across sessions");
+    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
+        "changed-key", CancellationToken.None), "different fingerprint is blocked");
+    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Changed,
+        "initial-key", CancellationToken.None), "changed known_hosts entry is blocked");
+    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Revoked,
+        "initial-key", CancellationToken.None), "revoked host key is blocked");
+    Expect(confirmations == 1, "first-use consent is only requested once");
+
+    var refuse = new SshHostTrustStore(Path.Combine(Path.GetTempPath(), $"dockermanager-refuse-{Guid.NewGuid():N}.json"));
+    refuse.ConfirmNewHostKey = (_, _, _, _) => Task.FromResult(false);
+    Expect(!await refuse.VerifyAsync("other.example.org", 22, Tmds.Ssh.KnownHostResult.Unknown,
+        "other-key", CancellationToken.None), "user refusal stops authentication");
+    Expect(!File.Exists(refuse.FilePath), "refused fingerprint is never saved");
+}
+finally { if (File.Exists(trustFile)) File.Delete(trustFile); }
+
 Console.WriteLine("All DockerManager managed-API smoke tests passed.");
