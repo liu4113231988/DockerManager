@@ -10,12 +10,26 @@ namespace DockerManager.Wpf.Services;
 public sealed class DockerApiClient
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(35);
+    private readonly SshHostTrustStore _trustStore = new();
 
-    private static async Task<Session> ConnectAsync(ConnectionProfile profile, CancellationToken ct)
+    public Func<string, int, string, CancellationToken, Task<bool>>? ConfirmNewHostKey
+    {
+        get => _trustStore.ConfirmNewHostKey;
+        set => _trustStore.ConfirmNewHostKey = value;
+    }
+
+    private async Task<Session> ConnectAsync(ConnectionProfile profile, CancellationToken ct)
     {
         var endpoint = DockerEndpoint.Parse(profile);
-        var ssh = new SshClient($"{Uri.UnescapeDataString(endpoint.UserInfo)}@{endpoint.Host}" +
-                                (endpoint.IsDefaultPort ? "" : $":{endpoint.Port}"));
+        var destination = $"{Uri.UnescapeDataString(endpoint.UserInfo)}@{endpoint.Host}" +
+                          (endpoint.IsDefaultPort ? "" : $":{endpoint.Port}");
+        var settings = new SshClientSettings(destination)
+        {
+            HostAuthentication = async (result, info, token) =>
+                await _trustStore.VerifyAsync(endpoint.Host, endpoint.Port, result,
+                    info.ServerKey.Key.SHA256FingerPrint, token)
+        };
+        var ssh = new SshClient(settings);
         try
         {
             await ssh.ConnectAsync(ct);
