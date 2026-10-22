@@ -8,7 +8,7 @@ public sealed class ContainerClient
     private readonly DockerApiClient _docker = new();
     private readonly KubernetesApiClient _kubernetes = new();
 
-    public Func<string, int, string, CancellationToken, Task<bool>>? ConfirmNewHostKey
+    public Func<HostKeyPrompt, CancellationToken, Task<bool>>? ConfirmNewHostKey
     {
         get => _docker.ConfirmNewHostKey;
         set => _docker.ConfirmNewHostKey = value;

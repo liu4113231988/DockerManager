@@ -42,20 +42,31 @@ public partial class MainWindow : Window
         UpdateModeUi();
     }
 
-    private async Task<bool> ConfirmNewHostKeyAsync(string host, int port, string fingerprint, CancellationToken ct)
+    private async Task<bool> ConfirmNewHostKeyAsync(HostKeyPrompt prompt, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        const string verify = "在服务器本地控制台执行以下命令，与上面显示的指纹逐字符比对：\n" +
+                             "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n" +
+                             "（若 SSH 使用其他主机密钥类型，请核对对应的 .pub 文件。）\n";
+        var text = prompt.Issue == HostKeyIssue.KnownHostKeyChanged
+            ? $"警告：SSH 服务器主机密钥与本机已记录的密钥不一致\n\n" +
+              $"服务器：{prompt.Host}:{prompt.Port}\n" +
+              $"服务器当前指纹：\n{prompt.Fingerprint}\n\n" +
+              "常见原因：服务器重装或重建、系统镜像恢复、该 IP 现在指向另一台机器。\n" +
+              "也可能是中间人攻击。\n\n" + verify + "\n" +
+              "确认这是本机服务器的新密钥后，选择“是”，程序会替换保存的旧指纹；\n" +
+              "若之前用命令行 ssh 连接过，可执行 ssh-keygen -R " + prompt.Host + " 清除 OpenSSH 旧记录。\n\n" +
+              "无法确认请选择“否”。"
+            : $"首次连接到 SSH 服务器：{prompt.Host}:{prompt.Port}\n\n" +
+              $"服务器公钥 SHA256 指纹：\n{prompt.Fingerprint}\n\n" +
+              verify + "\n" +
+              "完全一致后才选择“是”；不一致或无法核对请选择“否”。";
         var dialog = Dispatcher.InvokeAsync(() => MessageBox.Show(
-            this,
-            $"首次连接到 SSH 服务器：{host}:{port}\n\n" +
-            $"服务器公钥 SHA256 指纹：\n{fingerprint}\n\n" +
-            "必须先从服务器控制台或管理员提供的可信渠道，独立核对此指纹。\n" +
-            "可在 Linux 服务器控制台运行：\n" +
-            "ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n" +
-            "（如果使用其他主机密钥类型，应核对相应 .pub 文件。）\n\n" +
-            "核对完全一致后，是否信任并保存此服务器指纹？\n" +
-            "如果不一致或者无法核对，请选择“否”。",
-            "确认服务器 SSH 指纹", MessageBoxButton.YesNo, MessageBoxImage.Warning));
+            this, text,
+            prompt.Issue == HostKeyIssue.KnownHostKeyChanged ? "SSH 主机密钥已变化" : "确认服务器 SSH 指纹",
+            MessageBoxButton.YesNo,
+            prompt.Issue == HostKeyIssue.KnownHostKeyChanged ? MessageBoxImage.Warning : MessageBoxImage.Question,
+            MessageBoxResult.No));
         return await dialog.Task.WaitAsync(ct) == MessageBoxResult.Yes;
     }
 
@@ -188,7 +199,7 @@ public partial class MainWindow : Window
         {
             if (ct.IsCancellationRequested) return;
             StatusBox.Text = "连接或加载失败";
-            ShowError("加载失败，请检查 SSH 主机指纹、Docker Socket 权限或 K8s 认证。", ex);
+            ShowError("连接或加载失败。", ex);
         }
     }
 
@@ -347,6 +358,20 @@ public partial class MainWindow : Window
 
     private void ShowError(string title, Exception ex)
     {
-        MessageBox.Show(this, title + "\n\n" + ex.Message, "DockerManager", MessageBoxButton.OK, MessageBoxImage.Error);
+        // SSH trust rejections carry actionable guidance; show every layer so a wrapped
+        // library exception never hides the explanation.
+        var messages = new List<string>();
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message.Trim();
+            if (message.Length > 0 && !messages.Contains(message)) messages.Add(message);
+        }
+        // Fallback: even if a library layer drops the guidance, the SSH trust failure stays actionable.
+        if (messages.Any(m => m.Contains("is not trusted", StringComparison.OrdinalIgnoreCase) ||
+                              m.Contains("UntrustedPeer", StringComparison.OrdinalIgnoreCase)))
+            messages.Add("SSH 主机密钥未通过校验：请核对服务器指纹后再确认；服务器确实重装过时可执行 " +
+                         "ssh-keygen -R <主机> 清除 OpenSSH 旧记录后重连。");
+        MessageBox.Show(this, title + "\n\n" + string.Join("\n\n", messages), "DockerManager",
+            MessageBoxButton.OK, MessageBoxImage.Error);
     }
 }

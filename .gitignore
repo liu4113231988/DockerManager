@@ -41,3 +41,6 @@ WPF/release/
 *.user
 *.suo
 .vs/
+
+# Local agent workspace data (not project code)
+.workbuddy/

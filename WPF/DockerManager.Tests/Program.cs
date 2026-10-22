@@ -109,35 +109,75 @@ users:
 }
 finally { File.Delete(path); }
 
-// Host-key trust: first connection prompts, subsequent connections use a persistent pin.
+// Host-key trust: first connection asks, later connections reuse a persistent pin.
+// A key that conflicts with known_hosts must be recoverable, but only through an explicit decision.
 var trustFile = Path.Combine(Path.GetTempPath(), $"dockermanager-trust-{Guid.NewGuid():N}.json");
+static async Task ExpectRejected(Func<Task> action, string message)
+{
+    try { await action(); }
+    catch (SshHostKeyRejectedException) { Console.WriteLine("PASS " + message); return; }
+    throw new Exception("FAIL " + message);
+}
 try
 {
     var trusted = new SshHostTrustStore(trustFile);
-    var confirmations = 0;
-    trusted.ConfirmNewHostKey = (_, _, fingerprint, _) =>
+    var prompts = new List<HostKeyPrompt>();
+    trusted.ConfirmNewHostKey = (prompt, _) =>
     {
-        Expect(fingerprint == "SHA256:initial-key", "dialog displays complete fingerprint");
-        confirmations++;
-        return Task.FromResult(true);
+        prompts.Add(prompt);
+        // A different key record is the only prompt that may replace a stored fingerprint.
+        return Task.FromResult(prompt.Issue == HostKeyIssue.FirstConnection);
     };
     Expect(await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
         "initial-key", CancellationToken.None), "first use is explicitly accepted");
+    Expect(prompts.Count == 1 && prompts[0].Fingerprint == "SHA256:initial-key"
+        && prompts[0].Issue == HostKeyIssue.FirstConnection, "dialog displays complete fingerprint");
 
-    var reloaded = new SshHostTrustStore(trustFile);
+    var reloaded = new SshHostTrustStore(trustFile)
+    {
+        ConfirmNewHostKey = (prompt, _) => { prompts.Add(prompt); return Task.FromResult(false); }
+    };
     Expect(await reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
         "initial-key", CancellationToken.None), "saved host key persists across sessions");
-    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
-        "changed-key", CancellationToken.None), "different fingerprint is blocked");
-    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Changed,
-        "initial-key", CancellationToken.None), "changed known_hosts entry is blocked");
-    Expect(!await trusted.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Revoked,
-        "initial-key", CancellationToken.None), "revoked host key is blocked");
-    Expect(confirmations == 1, "first-use consent is only requested once");
+    Expect(await reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Changed,
+        "initial-key", CancellationToken.None), "approved key wins over a stale known_hosts entry");
+    Expect(await reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Trusted,
+        "initial-key", CancellationToken.None), "trusted host is never rejected");
+    Expect(prompts.Count == 1, "pinned host needs no confirmation");
+
+    await ExpectRejected(() => reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
+        "changed-key", CancellationToken.None), "different fingerprint is refused after a decline");
+    Expect(prompts.Count == 2 && prompts[1].Issue == HostKeyIssue.KnownHostKeyChanged,
+        "conflicting key is flagged as a change");
+    await ExpectRejected(() => reloaded.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Revoked,
+        "initial-key", CancellationToken.None), "revoked host key is always blocked");
+    Expect(prompts.Count == 2, "revoked key never prompts");
+    await ExpectRejected(async () => await reloaded.VerifyAsync("other.example.org", 22,
+        Tmds.Ssh.KnownHostResult.Unknown, "other-key", CancellationToken.None, allowInteraction: false),
+        "non-interactive first connection is rejected instead of hanging");
+
+    // Recovery path: a rebuilt server key can be approved, replacing the stored fingerprint.
+    var recoveryFile = Path.Combine(Path.GetTempPath(), $"dockermanager-recovery-{Guid.NewGuid():N}.json");
+    try
+    {
+        var recovery = new SshHostTrustStore(recoveryFile);
+        recovery.ConfirmNewHostKey = (_, _) => Task.FromResult(true);
+        Expect(await recovery.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Unknown,
+            "old-key", CancellationToken.None), "seed original fingerprint");
+        string? issued = null;
+        recovery.ConfirmNewHostKey = (prompt, _) => { issued = prompt.Issue.ToString(); return Task.FromResult(true); };
+        Expect(await recovery.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Changed,
+            "new-key", CancellationToken.None), "changed key can be approved after verification");
+        Expect(issued == nameof(HostKeyIssue.KnownHostKeyChanged), "changed key is flagged as a change");
+        var afterReplace = new SshHostTrustStore(recoveryFile);
+        Expect(await afterReplace.VerifyAsync("example.org", 2222, Tmds.Ssh.KnownHostResult.Changed,
+            "new-key", CancellationToken.None), "replacement fingerprint persists without prompting");
+    }
+    finally { if (File.Exists(recoveryFile)) File.Delete(recoveryFile); }
 
     var refuse = new SshHostTrustStore(Path.Combine(Path.GetTempPath(), $"dockermanager-refuse-{Guid.NewGuid():N}.json"));
-    refuse.ConfirmNewHostKey = (_, _, _, _) => Task.FromResult(false);
-    Expect(!await refuse.VerifyAsync("other.example.org", 22, Tmds.Ssh.KnownHostResult.Unknown,
+    refuse.ConfirmNewHostKey = (_, _) => Task.FromResult(false);
+    await ExpectRejected(() => refuse.VerifyAsync("other.example.org", 22, Tmds.Ssh.KnownHostResult.Unknown,
         "other-key", CancellationToken.None), "user refusal stops authentication");
     Expect(!File.Exists(refuse.FilePath), "refused fingerprint is never saved");
 }

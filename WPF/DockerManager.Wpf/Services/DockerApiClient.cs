@@ -12,7 +12,7 @@ public sealed class DockerApiClient
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(35);
     private readonly SshHostTrustStore _trustStore = new();
 
-    public Func<string, int, string, CancellationToken, Task<bool>>? ConfirmNewHostKey
+    public Func<HostKeyPrompt, CancellationToken, Task<bool>>? ConfirmNewHostKey
     {
         get => _trustStore.ConfirmNewHostKey;
         set => _trustStore.ConfirmNewHostKey = value;
