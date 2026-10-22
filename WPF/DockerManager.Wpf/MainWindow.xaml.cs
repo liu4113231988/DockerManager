@@ -354,7 +354,7 @@ public partial class MainWindow : Window
     }
 
     private void ClearLogs_Click(object sender, RoutedEventArgs e) => LogBox.Clear();
-    private void Window_Closing(object? sender, CancelEventArgs e) { StopLogs(); CancelRequest(); }
+    private void Window_Closing(object? sender, CancelEventArgs e) { StopLogs(); CancelRequest(); _client.Dispose(); }
 
     private void ShowError(string title, Exception ex)
     {
@@ -366,11 +366,16 @@ public partial class MainWindow : Window
             var message = current.Message.Trim();
             if (message.Length > 0 && !messages.Contains(message)) messages.Add(message);
         }
-        // Fallback: even if a library layer drops the guidance, the SSH trust failure stays actionable.
-        if (messages.Any(m => m.Contains("is not trusted", StringComparison.OrdinalIgnoreCase) ||
-                              m.Contains("UntrustedPeer", StringComparison.OrdinalIgnoreCase)))
+        // Fallback: even if a library layer drops the guidance, common SSH failures stay actionable.
+        var combined = string.Join("\n", messages);
+        if (combined.Contains("is not trusted", StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains("UntrustedPeer", StringComparison.OrdinalIgnoreCase))
             messages.Add("SSH 主机密钥未通过校验：请核对服务器指纹后再确认；服务器确实重装过时可执行 " +
                          "ssh-keygen -R <主机> 清除 OpenSSH 旧记录后重连。");
+        else if (combined.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
+                 combined.Contains("authentication", StringComparison.OrdinalIgnoreCase))
+            messages.Add("SSH 认证被拒绝：请确认连接使用的账号有权访问 Docker Socket，" +
+                         "公钥已加入服务器 ~/.ssh/authorized_keys，或在 ~/.ssh/config 中为该主机配置 IdentityFile。");
         MessageBox.Show(this, title + "\n\n" + string.Join("\n\n", messages), "DockerManager",
             MessageBoxButton.OK, MessageBoxImage.Error);
     }

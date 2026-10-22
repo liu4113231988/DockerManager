@@ -3,10 +3,12 @@ using DockerManager.Wpf.Models;
 namespace DockerManager.Wpf.Services;
 
 /// <summary>UI-facing facade. All remote operations use managed .NET libraries, never external executables.</summary>
-public sealed class ContainerClient
+public sealed class ContainerClient : IDisposable
 {
     private readonly DockerApiClient _docker = new();
     private readonly KubernetesApiClient _kubernetes = new();
+
+    public void Dispose() => _docker.Dispose();
 
     public Func<HostKeyPrompt, CancellationToken, Task<bool>>? ConfirmNewHostKey
     {

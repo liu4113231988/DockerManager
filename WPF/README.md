@@ -8,11 +8,12 @@ Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作�
 - Docker Compose：直接读取 Engine 容器的 `com.docker.compose.project` / `.service` 标签，对容器按项目分组；支持项目中的容器级操作。**不执行 `compose up/down`**。
 - Kubernetes：官方 `KubernetesClient` 从 kubeconfig 读取当前或指定 context，列举所有 namespace 的 Pod/容器、Pod JSON 详情、流式日志；不执行工作负载写操作。
 - 通用：多连接、本地搜索、日志导出、自动取消上一批请求、日志长度限制。
+- SSH 连接按“用户@主机:端口/Socket 路径”复用：同一连接的多次操作（Compose 刷新、详情+日志）只做一次握手，空闲 5 分钟后自动断开；失败或取消的会话不会复用。
 
 ## 连接要求
 
 - Docker SSH：远程主机需要 OpenSSH Server 和 Docker Engine；OpenSSH 必须允许 `direct-streamlocal` Unix Socket 访问。SSH 用户需对 `/var/run/docker.sock` 有权限，亦可自定义 Socket 路径。**该权限等价于高权限主机访问，务必使用可信账号**。
-- SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次连接陌生服务器时，程序显示主机 SHA256 指纹，要求用户通过服务器控制台或可信管理员独立核对，并明确选择是否信任。确认后的指纹保存在 `%APPDATA%\DockerManager\trusted-ssh-hosts.json`；以后自动校验（即使 `known_hosts` 里仍留有旧记录）。指纹变化时程序会以“主机密钥已变化”警告重新征求确认，撤销（`@revoked`）的密钥一律拒绝，不会自动接受。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
+- SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次连接陌生服务器时，程序显示主机 SHA256 指纹，要求用户通过服务器控制台或可信管理员独立核对，并明确选择是否信任。确认后的指纹保存在 `%APPDATA%\DockerManager\trusted-ssh-hosts.json`；以后自动校验（即使 `known_hosts` 里仍留有旧记录）。指纹变化时程序会以“主机密钥已变化”警告重新征求确认，撤销（`@revoked`）的密钥一律拒绝，不会自动接受。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证（`IdentityFile`、`Port`、`ProxyJump`、`StrictHostKeyChecking` 均按 `ssh` 命令行行为解析）；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
 - Kubernetes：读取已存在的 kubeconfig（默认 `%USERPROFILE%\.kube\config`）。支持标准证书/Token 方式，**故意拒绝** `exec` / `auth-provider` 外部认证机制，避免暗中启动 `gcloud`、`aws` 等 CLI。也会拒绝 `insecure-skip-tls-verify`。其他复杂认证方案、组合多个 KUBECONFIG 文件还未支持。
 - 旧版 Docker Context 已停用：升级后请重新添加 `ssh://用户名@服务器[:端口]` 的 Docker SSH 连接。
 

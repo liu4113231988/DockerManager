@@ -7,10 +7,13 @@ using Tmds.Ssh;
 namespace DockerManager.Wpf.Services;
 
 /// <summary>Direct SSH Unix-socket transport to Docker Engine REST API; no docker.exe or ssh.exe.</summary>
-public sealed class DockerApiClient
+public sealed class DockerApiClient : IDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(35);
+    private static readonly TimeSpan SessionIdleLimit = TimeSpan.FromMinutes(5);
+
     private readonly SshHostTrustStore _trustStore = new();
+    private readonly ResourcePool<Session> _sessions = new(SessionIdleLimit);
 
     public Func<HostKeyPrompt, CancellationToken, Task<bool>>? ConfirmNewHostKey
     {
@@ -18,33 +21,52 @@ public sealed class DockerApiClient
         set => _trustStore.ConfirmNewHostKey = value;
     }
 
-    private async Task<Session> ConnectAsync(ConnectionProfile profile, CancellationToken ct)
+    public void Dispose() => _sessions.Clear();
+
+    // A healthy session is reused, so a Compose refresh (projects + containers) or a log
+    // request (inspect + logs) performs a single SSH handshake instead of one per call.
+    private async Task<Session> RentAsync(ConnectionProfile profile, CancellationToken ct)
+    {
+        var endpoint = DockerEndpoint.Parse(profile);
+        var key = $"{Uri.UnescapeDataString(endpoint.UserInfo).ToLowerInvariant()}@{endpoint.Host}:{endpoint.Port}" +
+                  $"/{DockerEndpoint.SocketPath(profile)}";
+        return await _sessions.RentAsync(key, token => ConnectAsync(profile, key, token), ct);
+    }
+
+    private void Return(Session session, CancellationToken ct)
+    {
+        // A cancelled operation may leave the tunnel half-used; never hand such a session back.
+        if (ct.IsCancellationRequested) session.Fault();
+        _sessions.Return(session.Key, session);
+    }
+
+    private async Task<Session> ConnectAsync(ConnectionProfile profile, string key, CancellationToken ct)
     {
         var endpoint = DockerEndpoint.Parse(profile);
         var destination = $"{Uri.UnescapeDataString(endpoint.UserInfo)}@{endpoint.Host}" +
                           (endpoint.IsDefaultPort ? "" : $":{endpoint.Port}");
-        var settings = new SshClientSettings(destination)
+        HostAuthentication verify = async (context, token) =>
         {
-            HostAuthentication = async (context, token) =>
+            // Tmds.Ssh 0.26.0 uses HostAuthenticationContext + CancellationToken.
+            // Prompt only for an interactive initial connection, never during rekey.
+            bool interactive = !context.IsNonInteractive;
+            if (interactive) context.SuspendConnectTimeout();
+            try
             {
-                // Tmds.Ssh 0.26.0 uses HostAuthenticationContext + CancellationToken.
-                // Prompt only for an interactive initial connection, never during rekey.
-                bool interactive = !context.IsNonInteractive;
-                if (interactive) context.SuspendConnectTimeout();
-                try
-                {
-                    return await _trustStore.VerifyAsync(
-                        endpoint.Host, endpoint.Port, context.KnownHostResult,
-                        context.ConnectionInfo.ServerKey.Key.SHA256FingerPrint,
-                        token, allowInteraction: interactive);
-                }
-                finally
-                {
-                    if (interactive) context.ResumeConnectTimeout();
-                }
+                return await _trustStore.VerifyAsync(
+                    endpoint.Host, endpoint.Port, context.KnownHostResult,
+                    context.ConnectionInfo.ServerKey.Key.SHA256FingerPrint,
+                    token, allowInteraction: interactive);
+            }
+            finally
+            {
+                if (interactive) context.ResumeConnectTimeout();
             }
         };
-        var ssh = new SshClient(settings);
+        // Read the OpenSSH user configuration (~/.ssh/config) so IdentityFile, Port, ProxyJump and
+        // StrictHostKeyChecking behave like the ssh command line. Missing files are ignored.
+        var config = new SshConfigSettings { HostAuthentication = verify, AutoConnect = false };
+        var ssh = new SshClient(destination, config);
         try
         {
             await ssh.ConnectAsync(ct);
@@ -60,7 +82,7 @@ public sealed class DockerApiClient
                 BaseAddress = new Uri("http://docker.internal/"),
                 Timeout = Timeout.InfiniteTimeSpan // Streaming requests must not time out after 100 seconds.
             };
-            var session = new Session(ssh, http);
+            var session = new Session(ssh, http) { Key = key };
             try
             {
                 using var version = await session.RequestAsync(HttpMethod.Get, "version", ct);
@@ -77,16 +99,35 @@ public sealed class DockerApiClient
         catch { ssh.Dispose(); throw; }
     }
 
-    private sealed class Session(SshClient ssh, HttpClient http) : IDisposable
+    private sealed class Session(SshClient ssh, HttpClient http) : IDisposable, IPooledResource
     {
+        public string Key { get; init; } = "";
         public string ApiVersion { get; set; } = "";
         public string ServerVersion { get; set; } = "";
+
+        private bool _disposed;
+        private bool _faulted;
+
+        public bool IsUsable => !_disposed && !_faulted;
+
+        public void Fault() => _faulted = true;
+
         public async Task<HttpResponseMessage> RequestAsync(HttpMethod verb, string path, CancellationToken ct, bool stream = false)
         {
             using var request = new HttpRequestMessage(verb, path);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             if (!stream) timeout.CancelAfter(RequestTimeout);
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            HttpResponseMessage response;
+            try
+            {
+                response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            }
+            catch
+            {
+                // A failed request usually means the tunnel or the Engine went away.
+                _faulted = true;
+                throw;
+            }
             if (!response.IsSuccessStatusCode)
             {
                 using (response)
@@ -97,22 +138,30 @@ public sealed class DockerApiClient
             }
             return response;
         }
-        public void Dispose() { http.Dispose(); ssh.Dispose(); }
+        public void Dispose() { if (_disposed) return; _disposed = true; http.Dispose(); ssh.Dispose(); }
     }
 
     public async Task<string> TestAsync(ConnectionProfile profile, CancellationToken ct)
     {
-        using var session = await ConnectAsync(profile, ct);
-        using var response = await session.RequestAsync(HttpMethod.Get, $"{session.ApiVersion}/_ping", ct);
-        return $"Docker Engine {session.ServerVersion} · API {session.ApiVersion} · {await response.Content.ReadAsStringAsync(ct)}";
+        var session = await RentAsync(profile, ct);
+        try
+        {
+            using var response = await session.RequestAsync(HttpMethod.Get, $"{session.ApiVersion}/_ping", ct);
+            return $"Docker Engine {session.ServerVersion} · API {session.ApiVersion} · {await response.Content.ReadAsStringAsync(ct)}";
+        }
+        finally { Return(session, ct); }
     }
 
     public async Task<IReadOnlyList<WorkloadItem>> ContainersAsync(ConnectionProfile profile, CancellationToken ct)
     {
-        using var session = await ConnectAsync(profile, ct);
-        using var response = await session.RequestAsync(HttpMethod.Get, $"{session.ApiVersion}/containers/json?all=1&size=0", ct);
-        using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-        return ParseContainers(json.RootElement);
+        var session = await RentAsync(profile, ct);
+        try
+        {
+            using var response = await session.RequestAsync(HttpMethod.Get, $"{session.ApiVersion}/containers/json?all=1&size=0", ct);
+            using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            return ParseContainers(json.RootElement);
+        }
+        finally { Return(session, ct); }
     }
 
     public static IReadOnlyList<WorkloadItem> ParseContainers(JsonElement array)
@@ -138,34 +187,46 @@ public sealed class DockerApiClient
 
     public async Task<string> InspectAsync(ConnectionProfile profile, string id, CancellationToken ct)
     {
-        using var session = await ConnectAsync(profile, ct);
-        using var response = await session.RequestAsync(HttpMethod.Get,
-            $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/json", ct);
-        using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-        return JsonSerializer.Serialize(json.RootElement, new JsonSerializerOptions { WriteIndented = true });
+        var session = await RentAsync(profile, ct);
+        try
+        {
+            using var response = await session.RequestAsync(HttpMethod.Get,
+                $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/json", ct);
+            using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            return JsonSerializer.Serialize(json.RootElement, new JsonSerializerOptions { WriteIndented = true });
+        }
+        finally { Return(session, ct); }
     }
 
     public async Task ActionAsync(ConnectionProfile profile, string id, string action, CancellationToken ct)
     {
         if (action is not ("start" or "stop" or "restart")) throw new ArgumentOutOfRangeException(nameof(action));
-        using var session = await ConnectAsync(profile, ct);
-        using var response = await session.RequestAsync(HttpMethod.Post,
-            $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/{action}" +
-            (action is "stop" or "restart" ? "?t=10" : ""), ct);
+        var session = await RentAsync(profile, ct);
+        try
+        {
+            using var response = await session.RequestAsync(HttpMethod.Post,
+                $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/{action}" +
+                (action is "stop" or "restart" ? "?t=10" : ""), ct);
+        }
+        finally { Return(session, ct); }
     }
 
     public async Task LogsAsync(ConnectionProfile profile, string id, int tail, bool follow, Action<string> onLine, CancellationToken ct)
     {
-        using var session = await ConnectAsync(profile, ct);
-        // Engine log responses can be raw UTF-8 (TTY) or Docker's multiplexed stdout/stderr format.
-        using var inspect = await session.RequestAsync(HttpMethod.Get,
-            $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/json", ct);
-        using var json = await JsonDocument.ParseAsync(await inspect.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-        bool tty = json.RootElement.GetProperty("Config").TryGetProperty("Tty", out var flag) && flag.GetBoolean();
-        var path = $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/logs" +
-            $"?stdout=1&stderr=1&timestamps=1&follow={DockerEndpoint.QueryBool(follow)}&tail={tail}";
-        using var response = await session.RequestAsync(HttpMethod.Get, path, ct, stream: true);
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        await DockerLogDecoder.ReadAsync(stream, tty, onLine, ct);
+        var session = await RentAsync(profile, ct);
+        try
+        {
+            // Engine log responses can be raw UTF-8 (TTY) or Docker's multiplexed stdout/stderr format.
+            using var inspect = await session.RequestAsync(HttpMethod.Get,
+                $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/json", ct);
+            using var json = await JsonDocument.ParseAsync(await inspect.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            bool tty = json.RootElement.GetProperty("Config").TryGetProperty("Tty", out var flag) && flag.GetBoolean();
+            var path = $"{session.ApiVersion}/containers/{DockerEndpoint.ApiPath(id)}/logs" +
+                $"?stdout=1&stderr=1&timestamps=1&follow={DockerEndpoint.QueryBool(follow)}&tail={tail}";
+            using var response = await session.RequestAsync(HttpMethod.Get, path, ct, stream: true);
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            await DockerLogDecoder.ReadAsync(stream, tty, onLine, ct);
+        }
+        finally { Return(session, ct); }
     }
 }

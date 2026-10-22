@@ -183,4 +183,43 @@ try
 }
 finally { if (File.Exists(trustFile)) File.Delete(trustFile); }
 
+// Session pool: healthy connections are reused, broken or cancelled ones are discarded.
+var pool = new ResourcePool<PooledFake>(TimeSpan.FromMinutes(5));
+var created = 0;
+PooledFake Connect(string name) => new(name) { Number = Interlocked.Increment(ref created) };
+var first = await pool.RentAsync("docker:host", _ => Task.FromResult(Connect("a")), CancellationToken.None);
+pool.Return("docker:host", first);
+var reused = await pool.RentAsync("docker:host", _ => Task.FromResult(Connect("b")), CancellationToken.None);
+Expect(ReferenceEquals(first, reused), "healthy session is reused");
+
+var broken = new PooledFake("broken") { Usable = false };
+pool.Return("docker:host", broken);
+var replaced = await pool.RentAsync("docker:host", _ => Task.FromResult(Connect("c")), CancellationToken.None);
+Expect(!ReferenceEquals(broken, replaced), "broken session is discarded");
+Expect(broken.Disposed, "broken session is disposed");
+
+var isolated = await pool.RentAsync("docker:other", _ => Task.FromResult(Connect("d")), CancellationToken.None);
+Expect(!ReferenceEquals(replaced, isolated), "different connections stay isolated");
+pool.Return("docker:host", replaced);
+pool.Return("docker:other", isolated);
+
+var idlePool = new ResourcePool<PooledFake>(TimeSpan.FromMilliseconds(1));
+var idle = await idlePool.RentAsync("k", _ => Task.FromResult(new PooledFake("idle")), CancellationToken.None);
+idlePool.Return("k", idle);
+await Task.Delay(30);
+var fresh = await idlePool.RentAsync("k", _ => Task.FromResult(new PooledFake("fresh")), CancellationToken.None);
+Expect(!ReferenceEquals(idle, fresh), "idle session is recycled");
+Expect(idle.Disposed, "recycled session is disposed");
+pool.Clear();
+idlePool.Clear();
+
 Console.WriteLine("All DockerManager managed-API smoke tests passed.");
+
+sealed class PooledFake(string name) : IPooledResource, IDisposable
+{
+    public int Number { get; init; }
+    public bool Usable { get; set; } = true;
+    public bool Disposed { get; private set; }
+    public bool IsUsable => Usable && !Disposed;
+    public void Dispose() => Disposed = true;
+}
