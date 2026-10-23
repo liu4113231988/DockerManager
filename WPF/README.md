@@ -63,4 +63,6 @@ dotnet run --project .\DockerManager.Wpf\DockerManager.Wpf.csproj
 
 `%APPDATA%\DockerManager\connections.json` 仅保存主机地址、context 与 kubeconfig **路径**，不会主动存储密钥或 Token。该路径及对应权限仍是敏感信息，需要保护。Docker API 调用与 SSH 连接由托管库完成，日志跟踪采用取消令牌控制。
 
+未处理的界面异常不会直接结束进程：程序会记录完整堆栈到 `%APPDATA%\DockerManager\crash.log` 并弹窗提示，反馈问题时附上该文件即可定位。密码只有在勾选“记住密码”时才会保存，使用 Windows 当前用户凭据（DPAPI）加密写入 `%APPDATA%\DockerManager\credentials.json`，服务器拒绝时会自动清除。
+
 **状态：可供 Windows 构建及测试的 MVP；本地代码是在非 Windows 环境中生成，尚未完成 Windows 实机与真实集群的端到端验证。**

@@ -3,12 +3,15 @@ using System.Windows.Controls;
 
 namespace DockerManager.Wpf.Views;
 
-/// <summary>Per-session SSH password prompt. The password is only persisted when the user opts in.</summary>
+/// <summary>
+/// Per-session SSH password prompt. The password is only persisted when the user opts in.
+/// Values are copied into plain fields on OK so callers on other threads never touch WPF controls.
+/// </summary>
 public partial class PasswordDialog : Window
 {
-    public string Password => PasswordBox.Password;
+    public string Password { get; private set; } = "";
 
-    public bool Remember => RememberBox.IsChecked == true;
+    public bool Remember { get; private set; }
 
     public PasswordDialog(string destination)
     {
@@ -21,11 +24,14 @@ public partial class PasswordDialog : Window
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
-        if (Password.Length == 0)
+        if (PasswordBox.Password.Length == 0)
         {
             MessageBox.Show(this, "密码不能为空；如不想使用密码请选择取消。", Title);
             return;
         }
+        // Snapshot the controls while still on the UI thread.
+        Password = PasswordBox.Password;
+        Remember = RememberBox.IsChecked == true;
         DialogResult = true;
     }
 

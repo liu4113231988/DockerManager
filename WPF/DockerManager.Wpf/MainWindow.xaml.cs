@@ -145,6 +145,9 @@ public partial class MainWindow : Window
         return await dialog.Task.WaitAsync(ct) == MessageBoxResult.Yes;
     }
 
+    /// <summary>Snapshot of the password prompt, captured on the UI thread.</summary>
+    private readonly record struct PasswordEntry(string Password, bool Remember);
+
     private async Task<string?> PromptPasswordAsync(string destination, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -155,23 +158,25 @@ public partial class MainWindow : Window
             _savedPasswordUsed = destination;
             return saved;
         }
+        // This callback is invoked from a worker thread. Copy what we need off the dialog inside the
+        // dispatcher call so nothing touches a WPF object after the await resumes elsewhere.
         var dialog = Dispatcher.InvokeAsync(() =>
         {
             var prompt = new PasswordDialog(destination) { Owner = this };
-            return prompt.ShowDialog() == true ? prompt : null;
+            return prompt.ShowDialog() == true ? new PasswordEntry(prompt.Password, prompt.Remember) : (PasswordEntry?)null;
         });
-        var prompt = await dialog.Task.WaitAsync(ct);
-        if (prompt is null) return null;
-        if (prompt.Remember)
+        var entry = await dialog.Task.WaitAsync(ct);
+        if (entry is not { } passwordEntry) return null;
+        if (passwordEntry.Remember)
         {
             try
             {
-                _credentials.Set(destination, prompt.Password);
+                _credentials.Set(destination, passwordEntry.Password);
                 _savedPasswordUsed = destination;
             }
             catch (Exception ex) { ShowError("保存密码失败。", ex); }
         }
-        return prompt.Password;
+        return passwordEntry.Password;
     }
 
     private void SaveProfiles()
@@ -812,6 +817,17 @@ public partial class MainWindow : Window
 
     private void ShowError(string title, Exception ex)
     {
+        // SSH/store callbacks can surface errors on worker threads. Touching this window or showing a
+        // MessageBox owned by it from there throws "该 DependencyObject 不是创建它的 Dispatcher 线程的所属对象",
+        // so every entry point funnels through the dispatcher first.
+        if (!Dispatcher.CheckAccess())
+        {
+            if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            try { Dispatcher.Invoke(() => ShowError(title, ex)); }
+            catch (Exception) { /* the window is going away; nothing left to show */ }
+            return;
+        }
+
         // SSH trust rejections carry actionable guidance; show every layer so a wrapped
         // library exception never hides the explanation.
         var messages = new List<string>();
