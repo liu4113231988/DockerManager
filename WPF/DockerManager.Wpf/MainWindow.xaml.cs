@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using DockerManager.Wpf.Models;
 using DockerManager.Wpf.Services;
 using DockerManager.Wpf.Views;
@@ -18,6 +19,9 @@ public partial class MainWindow : Window
     private IReadOnlyList<WorkloadItem> _items = [];
     private ViewKind _view = ViewKind.Docker;
     private bool _loadingProjects;
+    private string _sortKey = nameof(WorkloadItem.Name);
+    private bool _sortAscending = true;
+    private int _loadCount;
     private CancellationTokenSource? _activeRequest;
     private CancellationTokenSource? _logCancellation;
     private bool _followingLogs;
@@ -123,6 +127,7 @@ public partial class MainWindow : Window
     {
         var profile = Profile;
         CurrentTitle.Text = profile?.Name ?? "请选择连接";
+        Title = profile is null ? "DockerManager - 远程容器管理器" : $"DockerManager - {profile.Name}";
         bool docker = profile != null && profile.Kind != ConnectionKind.Kubernetes;
         DockerModeButton.IsEnabled = docker;
         ComposeModeButton.IsEnabled = docker;
@@ -132,6 +137,24 @@ public partial class MainWindow : Window
         K8sModeButton.FontWeight = _view == ViewKind.Kubernetes ? FontWeights.Bold : FontWeights.Normal;
         ProjectBox.Visibility = _view == ViewKind.Compose && docker ? Visibility.Visible : Visibility.Collapsed;
         UpdateSelectionUi();
+    }
+
+    /// <summary>Prevents duplicate requests while a load is already running.</summary>
+    private void BeginLoad()
+    {
+        _loadCount++;
+        RefreshButton.IsEnabled = false;
+        TestButton.IsEnabled = false;
+    }
+
+    private void EndLoad()
+    {
+        if (--_loadCount <= 0)
+        {
+            _loadCount = 0;
+            RefreshButton.IsEnabled = true;
+            TestButton.IsEnabled = true;
+        }
     }
 
     private CancellationToken StartRequest()
@@ -149,6 +172,41 @@ public partial class MainWindow : Window
 
     private void WorkloadsGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelectionUi();
 
+    private void WorkloadsGrid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        // Sorting is applied by ApplyFilter, so the order survives refreshes and filtering.
+        e.Handled = true;
+        var key = e.Column.SortMemberPath;
+        if (string.IsNullOrEmpty(key)) return;
+        if (_sortKey == key) _sortAscending = !_sortAscending;
+        else { _sortKey = key; _sortAscending = true; }
+        e.Column.SortDirection = _sortAscending ? ListSortDirection.Ascending : ListSortDirection.Descending;
+        ApplyFilter();
+    }
+
+    private void WorkloadsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (Selected is not null) Inspect_Click(InspectButton, new RoutedEventArgs());
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.F5) { Refresh_Click(this, new RoutedEventArgs()); e.Handled = true; }
+        else if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            SearchBox.Focus();
+            SearchBox.SelectAll();
+            e.Handled = true;
+        }
+    }
+
+    private void SearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        SearchBox.Clear();
+        e.Handled = true;
+    }
+
     private void UpdateSelectionUi()
     {
         var selected = Selected is not null && Profile is not null;
@@ -164,9 +222,15 @@ public partial class MainWindow : Window
         var profile = Profile;
         var selectedView = _view;
         var ct = StartRequest();
-        _items = [];
-        ApplyFilter();
-        if (profile is null) { StatusBox.Text = "请添加一个连接"; return; }
+        if (profile is null)
+        {
+            _items = [];
+            ApplyFilter();
+            StatusBox.Text = "请添加一个连接";
+            return;
+        }
+        // Keep the previous list visible while loading instead of flashing an empty grid.
+        BeginLoad();
         StatusBox.Text = "正在连接及加载...";
         try
         {
@@ -191,16 +255,21 @@ public partial class MainWindow : Window
                 _items = await _client.DockerContainersAsync(profile, ct);
             ct.ThrowIfCancellationRequested();
             if (Profile?.Id != profile.Id || _view != selectedView) return;
+            StatusBox.Text = selectedView == ViewKind.Compose
+                ? ProjectBox.Items.Count == 0
+                    ? "未发现 Compose 项目"
+                    : $"Compose 项目：{(ProjectBox.SelectedItem as ComposeProject)?.Name}（{_items.Count} 个容器）"
+                : $"已连接：{profile.Name}";
             ApplyFilter();
-            StatusBox.Text = $"已连接：{profile.Name}";
         }
         catch (OperationCanceledException) { /* A newer selection took over. */ }
         catch (Exception ex)
         {
             if (ct.IsCancellationRequested) return;
-            StatusBox.Text = "连接或加载失败";
+            StatusBox.Text = _items.Count > 0 ? "连接或加载失败（仍显示上次的数据）" : "连接或加载失败";
             ShowError("连接或加载失败。", ex);
         }
+        finally { EndLoad(); }
     }
 
     private async void ProjectBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -210,6 +279,7 @@ public partial class MainWindow : Window
         if (ProjectBox.SelectedItem is not ComposeProject project) { _items = []; ApplyFilter(); return; }
         var profile = Profile;
         var ct = StartRequest();
+        BeginLoad();
         StatusBox.Text = "正在加载 Compose 项目...";
         try
         {
@@ -222,6 +292,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("加载 Compose 项目失败。", ex); }
+        finally { EndLoad(); }
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
@@ -233,6 +304,20 @@ public partial class MainWindow : Window
         var visible = string.IsNullOrWhiteSpace(search) ? _items : _items.Where(x =>
             new[] { x.Name, x.Image, x.Namespace, x.Container, x.Project, x.Service, x.State }
                 .Any(v => v.Contains(search, StringComparison.OrdinalIgnoreCase))).ToList();
+        Func<WorkloadItem, string> key = _sortKey switch
+        {
+            nameof(WorkloadItem.Container) => x => x.Container,
+            nameof(WorkloadItem.Namespace) => x => x.Namespace,
+            nameof(WorkloadItem.Image) => x => x.Image,
+            nameof(WorkloadItem.State) => x => x.State,
+            nameof(WorkloadItem.Status) => x => x.Status,
+            nameof(WorkloadItem.Project) => x => x.Project,
+            nameof(WorkloadItem.Service) => x => x.Service,
+            _ => x => x.Name
+        };
+        visible = _sortAscending
+            ? visible.OrderBy(key, StringComparer.OrdinalIgnoreCase).ToList()
+            : visible.OrderByDescending(key, StringComparer.OrdinalIgnoreCase).ToList();
         WorkloadsGrid.ItemsSource = visible;
         CountBox.Text = $"{visible.Count} 项";
         if (selectedId != null) WorkloadsGrid.SelectedItem = visible.FirstOrDefault(x => (x.Id, x.Namespace, x.Container) == selectedId.Value);
@@ -243,6 +328,7 @@ public partial class MainWindow : Window
     {
         if (Profile is not { } profile) return;
         var ct = StartRequest();
+        BeginLoad();
         StatusBox.Text = "正在测试连接...";
         try
         {
@@ -253,6 +339,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("连接测试失败。", ex); }
+        finally { EndLoad(); }
     }
 
     private async void ContainerAction_Click(object sender, RoutedEventArgs e)
@@ -305,7 +392,7 @@ public partial class MainWindow : Window
         _followingLogs = true;
         LogButton.Content = "停止日志";
         LogBox.Clear();
-        StatusBox.Text = $"正在读取日志：{entry.Name}";
+        StatusBox.Text = $"正在读取日志：{entry.Name}" + (entry.Container.Length > 0 ? $"（容器 {entry.Container}）" : "");
         try
         {
             await _client.StreamLogsAsync(profile, entry, tail, FollowCheck.IsChecked == true,
