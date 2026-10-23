@@ -56,11 +56,14 @@ GitHub Actions 工作流 `WPF Windows Build` 在 Windows 上运行编译、基�
 dotnet run --project .\DockerManager.Wpf\DockerManager.Wpf.csproj
 ```
 
-或发布：
+或发布，两种打包方式产物都是**单个 EXE**，区别只在是否内置运行时：
 
-```powershell
-.\scripts\publish-win-x64.bat
-```
+| 方式 | 命令 | 产物目录 | 体积 | 目标机器要求 |
+| --- | --- | --- | --- | --- |
+| 自包含 | `.\scripts\publish-win-x64.bat` | `release\win-x64\` | ~150 MB | 无，可直接运行 |
+| 依赖框架 | `.\scripts\publish-win-x64-fx.bat` | `release\win-x64-fx\` | ~几 MB | 需安装 [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) |
+
+依赖框架版的 PowerShell 参数可指定架构：`.\scripts\publish-win-x64-fx.ps1 -Runtime win-arm64`。若目标机器缺少运行时，程序会提示缺少 `Microsoft.WindowsDesktop.App` 而无法启动——这是依赖框架版的正常行为，改用自包含版即可。
 
 也支持在 `WPF` 目录运行 `dotnet run --project .\DockerManager.Tests\DockerManager.Tests.csproj` 执行基础测试。
 
