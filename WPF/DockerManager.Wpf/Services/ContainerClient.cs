@@ -16,6 +16,12 @@ public sealed class ContainerClient : IDisposable
         set => _docker.ConfirmNewHostKey = value;
     }
 
+    public Func<string, CancellationToken, Task<string?>>? PromptPassword
+    {
+        get => _docker.PromptPassword;
+        set => _docker.PromptPassword = value;
+    }
+
     public Task<string> TestAsync(ConnectionProfile profile, CancellationToken ct) =>
         profile.Kind == ConnectionKind.Kubernetes ? _kubernetes.TestAsync(profile, ct) : _docker.TestAsync(profile, ct);
 

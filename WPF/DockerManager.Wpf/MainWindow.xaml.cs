@@ -46,6 +46,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _client.ConfirmNewHostKey = ConfirmNewHostKeyAsync;
+        _client.PromptPassword = PromptPasswordAsync;
         ConnectionList.ItemsSource = _profiles;
         LoadSettings();
         try
@@ -140,6 +141,17 @@ public partial class MainWindow : Window
             prompt.Issue == HostKeyIssue.KnownHostKeyChanged ? MessageBoxImage.Warning : MessageBoxImage.Question,
             MessageBoxResult.No));
         return await dialog.Task.WaitAsync(ct) == MessageBoxResult.Yes;
+    }
+
+    private async Task<string?> PromptPasswordAsync(string destination, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var dialog = Dispatcher.InvokeAsync(() =>
+        {
+            var prompt = new PasswordDialog(destination) { Owner = this };
+            return prompt.ShowDialog() == true ? prompt.Password : null;
+        });
+        return await dialog.Task.WaitAsync(ct);
     }
 
     private void SaveProfiles()
@@ -792,10 +804,12 @@ public partial class MainWindow : Window
             combined.Contains("UntrustedPeer", StringComparison.OrdinalIgnoreCase))
             messages.Add("SSH 主机密钥未通过校验：请核对服务器指纹后再确认；服务器确实重装过时可执行 " +
                          "ssh-keygen -R <主机> 清除 OpenSSH 旧记录后重连。");
-        else if (combined.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
-                 combined.Contains("authentication", StringComparison.OrdinalIgnoreCase))
-            messages.Add("SSH 认证被拒绝：请确认连接使用的账号有权访问 Docker Socket，" +
-                         "公钥已加入服务器 ~/.ssh/authorized_keys，或在 ~/.ssh/config 中为该主机配置 IdentityFile。");
+        else if (combined.Contains("AuthenticationFailed", StringComparison.OrdinalIgnoreCase) ||
+                 combined.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
+                 combined.Contains("These methods failed", StringComparison.OrdinalIgnoreCase))
+            messages.Add("SSH 认证被拒绝：本机密钥未被服务器接受。可在连接时输入该账号的密码（仅本次使用，不会保存），" +
+                         "或把本机公钥（~/.ssh/id_*.pub）加入服务器的 ~/.ssh/authorized_keys；" +
+                         "注意如果服务器禁用了密码登录（云主机常见），只能使用密钥方式。");
         MessageBox.Show(this, title + "\n\n" + string.Join("\n\n", messages), "DockerManager",
             MessageBoxButton.OK, MessageBoxImage.Error);
     }

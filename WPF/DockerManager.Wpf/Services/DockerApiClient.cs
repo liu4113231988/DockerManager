@@ -21,6 +21,9 @@ public sealed class DockerApiClient : IDisposable
         set => _trustStore.ConfirmNewHostKey = value;
     }
 
+    /// <summary>Per-session password prompt. Returning null cancels the connection; passwords are never stored.</summary>
+    public Func<string, CancellationToken, Task<string?>>? PromptPassword { get; set; }
+
     public void Dispose() => _sessions.Clear();
 
     // A healthy session is reused, so a Compose refresh (projects + containers) or a log
@@ -76,6 +79,13 @@ public sealed class DockerApiClient : IDisposable
                 // downgrade the connection to batch mode and the host key confirmation
                 // could never be shown, so force interactive authentication.
                 context.Settings.EnableBatchModeWhenConsoleIsRedirected = false;
+                // Offer password authentication in addition to the default key/agent credentials.
+                // The credential holds only a prompt callback, so nothing is ever persisted.
+                if (PromptPassword is not null)
+                {
+                    context.Settings.Credentials.Add(new PasswordCredential(async (_, token) =>
+                        await PromptPassword(destination, token)));
+                }
             }
         };
         var ssh = new SshClient(destination, config);
