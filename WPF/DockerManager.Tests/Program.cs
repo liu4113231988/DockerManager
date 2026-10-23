@@ -183,6 +183,49 @@ try
 }
 finally { if (File.Exists(trustFile)) File.Delete(trustFile); }
 
+// Images, networks and volumes parsing.
+using (var images = JsonDocument.Parse("""[{"Id":"sha256:abcdef1234567890","RepoTags":["nginx:latest","nginx:1.27"],"RepoDigests":["nginx@sha256:aaa"],"Size":1610612736,"Created":1735689600},{"Id":"sha256:999888777","RepoTags":[],"RepoDigests":[],"Size":512,"Created":0}]"""))
+{
+    var parsed = DockerApiClient.ParseImages(images.RootElement);
+    Expect(parsed.Count == 2, "parse image list");
+    Expect(parsed[0].Name == "nginx" && parsed[0].Tags == "nginx:latest, nginx:1.27", "image name and tags");
+    Expect(parsed[0].Kind == ResourceKind.Image, "image resource kind");
+    Expect(parsed[0].Size == "1.5 GB", "image size formatting: " + parsed[0].Size);
+    Expect(parsed[0].Status.Length == 16 && parsed[0].Status.Contains('-'), "image created formatting");
+    Expect(parsed[1].Name.Length > 0 && parsed[1].Tags == "<none>", "untagged image fallback");
+}
+using (var networks = JsonDocument.Parse("""[{"Name":"bridge","Id":"a1b2c3","Created":"2025-01-02T03:04:05.123456789Z","Scope":"local","Driver":"bridge"}]"""))
+{
+    var parsed = DockerApiClient.ParseNetworks(networks.RootElement);
+    Expect(parsed.Count == 1 && parsed[0].Name == "bridge" && parsed[0].Driver == "bridge" && parsed[0].Scope == "local",
+        "parse network list");
+    Expect(parsed[0].Kind == ResourceKind.Network, "network resource kind");
+}
+using (var volumes = JsonDocument.Parse("""{"Volumes":[{"Name":"data","Driver":"local","Mountpoint":"/var/lib/docker/volumes/data/_data","CreatedAt":"2025-01-02T03:04:05Z"}],"Warnings":[]}"""))
+{
+    var parsed = DockerApiClient.ParseVolumes(volumes.RootElement.GetProperty("Volumes"));
+    Expect(parsed.Count == 1 && parsed[0].Name == "data" && parsed[0].Mountpoint.EndsWith("_data"), "parse volume list");
+    Expect(parsed[0].Kind == ResourceKind.Volume, "volume resource kind");
+}
+Expect(DockerApiClient.FormatSize(0) == "0 B" && DockerApiClient.FormatSize(2048) == "2 KB", "size formatting");
+
+// Settings: a corrupted preferences file must never block startup.
+var settingsFile = Path.Combine(Path.GetTempPath(), $"dockermanager-settings-{Guid.NewGuid():N}.json");
+try
+{
+    var store = new SettingsStore(settingsFile);
+    var defaults = store.Load();
+    Expect(defaults.WindowWidth == 0 && defaults.LastLogDirectory.Length == 0, "default settings");
+    store.Save(new AppSettings { WindowWidth = 1280, WindowHeight = 800, WindowLeft = 100, WindowTop = 50, LastLogDirectory = @"D:\logs" });
+    var reloaded = new SettingsStore(settingsFile).Load();
+    Expect(reloaded.WindowWidth == 1280 && reloaded.WindowHeight == 800 && reloaded.WindowLeft == 100
+        && reloaded.WindowTop == 50 && reloaded.LastLogDirectory == @"D:\logs", "settings round trip");
+    File.WriteAllText(settingsFile, "{ not json");
+    var recovered = new SettingsStore(settingsFile).Load();
+    Expect(recovered.WindowWidth == 0, "corrupted settings fall back to defaults");
+}
+finally { if (File.Exists(settingsFile)) File.Delete(settingsFile); }
+
 // Session pool: healthy connections are reused, broken or cancelled ones are discarded.
 var pool = new ResourcePool<PooledFake>(TimeSpan.FromMinutes(5));
 var created = 0;

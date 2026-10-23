@@ -52,6 +52,9 @@
             <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
               <Button x:Name="DockerModeButton" Content="Docker 容器" Click="DockerMode_Click"/>
               <Button x:Name="ComposeModeButton" Content="Compose 项目" Click="ComposeMode_Click"/>
+              <Button x:Name="ImagesModeButton" Content="镜像" Click="ImagesMode_Click"/>
+              <Button x:Name="NetworksModeButton" Content="网络" Click="NetworksMode_Click"/>
+              <Button x:Name="VolumesModeButton" Content="存储卷" Click="VolumesMode_Click"/>
               <Button x:Name="K8sModeButton" Content="K8s Pods" Click="K8sMode_Click"/>
               <ComboBox x:Name="ProjectBox" Width="230" Visibility="Collapsed" SelectionChanged="ProjectBox_SelectionChanged" DisplayMemberPath="Name" Margin="12,0,0,0"/>
             </StackPanel>
@@ -64,6 +67,8 @@
               <Button x:Name="StartButton" Content="启动" Tag="start" Click="ContainerAction_Click"/>
               <Button x:Name="StopButton" Content="停止" Tag="stop" Click="ContainerAction_Click"/>
               <Button x:Name="RestartButton" Content="重启" Tag="restart" Click="ContainerAction_Click" Margin="0"/>
+              <Button x:Name="CreateButton" Content="新建" Click="CreateResource_Click"/>
+              <Button x:Name="DeleteButton" Content="删除" Click="DeleteResource_Click" Margin="0"/>
             </StackPanel>
           </DockPanel>
           <DataGrid Grid.Row="2" x:Name="WorkloadsGrid" SelectionChanged="WorkloadsGrid_SelectionChanged"
@@ -89,6 +94,8 @@
             <DockPanel Margin="0,0,0,8">
               <TextBlock Text="日志 / 详情" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" DockPanel.Dock="Left"/>
               <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock Text="过滤" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                <TextBox x:Name="LogFilterBox" Width="150" TextChanged="LogFilter_TextChanged" KeyDown="LogFilter_KeyDown" Margin="0,0,8,0" ToolTip="只显示包含关键字的日志行并高亮（Esc 清除）"/>
                 <TextBlock Text="最近行数" VerticalAlignment="Center" Margin="0,0,5,0"/>
                 <TextBox x:Name="TailBox" Text="200" Width="62" Margin="0,0,8,0"/>
                 <CheckBox x:Name="FollowCheck" Content="实时跟踪" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/>
@@ -97,9 +104,10 @@
                 <Button Content="清空" Click="ClearLogs_Click" Margin="0"/>
               </StackPanel>
             </DockPanel>
-            <TextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto" AcceptsReturn="True" FontFamily="Consolas" FontSize="12"
-                     Background="#111827" Foreground="#D1FAE5" BorderThickness="0" Padding="10"/>
+            <RichTextBox Grid.Row="1" x:Name="LogBox" IsReadOnly="True" IsDocumentEnabled="True"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         FontFamily="Consolas" FontSize="12" Background="#111827" Foreground="#D1FAE5"
+                         BorderThickness="0" Padding="10"/>
           </Grid>
         </Grid>
       </Border>

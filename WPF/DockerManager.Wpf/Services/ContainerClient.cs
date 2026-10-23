@@ -40,10 +40,28 @@ public sealed class ContainerClient : IDisposable
     public Task<IReadOnlyList<WorkloadItem>> PodsAsync(ConnectionProfile profile, CancellationToken ct) =>
         _kubernetes.PodsAsync(profile, ct);
 
+    public Task<IReadOnlyList<WorkloadItem>> ImagesAsync(ConnectionProfile profile, CancellationToken ct) =>
+        _docker.ImagesAsync(profile, ct);
+
+    public Task<IReadOnlyList<WorkloadItem>> NetworksAsync(ConnectionProfile profile, CancellationToken ct) =>
+        _docker.NetworksAsync(profile, ct);
+
+    public Task<IReadOnlyList<WorkloadItem>> VolumesAsync(ConnectionProfile profile, CancellationToken ct) =>
+        _docker.VolumesAsync(profile, ct);
+
+    public Task DeleteAsync(ConnectionProfile profile, WorkloadItem item, CancellationToken ct) =>
+        _docker.DeleteAsync(profile, item, ct);
+
+    public Task CreateVolumeAsync(ConnectionProfile profile, string name, string driver, CancellationToken ct) =>
+        _docker.CreateVolumeAsync(profile, name, driver, ct);
+
+    public Task CreateNetworkAsync(ConnectionProfile profile, string name, string driver, bool internalOnly, CancellationToken ct) =>
+        _docker.CreateNetworkAsync(profile, name, driver, internalOnly, ct);
+
     public async Task<string> InspectAsync(ConnectionProfile profile, WorkloadItem item, CancellationToken ct) =>
         profile.Kind == ConnectionKind.Kubernetes
             ? await _kubernetes.InspectAsync(profile, item, ct)
-            : await _docker.InspectAsync(profile, item.Id, ct);
+            : await _docker.InspectAsync(profile, item, ct);
 
     public Task ContainerActionAsync(ConnectionProfile profile, WorkloadItem item, string action, CancellationToken ct)
     {

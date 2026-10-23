@@ -31,7 +31,10 @@ public sealed class ConnectionProfile
     public override string ToString() => Name;
 }
 
-public enum ViewKind { Docker, Compose, Kubernetes }
+public enum ViewKind { Docker, Compose, Kubernetes, Images, Networks, Volumes }
+
+/// <summary>Which kind of remote object a <see cref="WorkloadItem"/> represents.</summary>
+public enum ResourceKind { Container, Image, Network, Volume, Pod }
 
 public sealed class WorkloadItem
 {
@@ -44,6 +47,12 @@ public sealed class WorkloadItem
     public string Project { get; init; } = "";
     public string Service { get; init; } = "";
     public string Container { get; init; } = "";
+    public string Tags { get; init; } = "";
+    public string Size { get; init; } = "";
+    public string Driver { get; init; } = "";
+    public string Scope { get; init; } = "";
+    public string Mountpoint { get; init; } = "";
+    public ResourceKind Kind { get; init; } = ResourceKind.Container;
 }
 
 public sealed class ComposeProject

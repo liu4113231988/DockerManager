@@ -4,11 +4,14 @@ Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作�
 
 ## 主要功能
 
-- Docker：SSH 隧道访问远程 Linux 的 Unix Socket，再通过 Docker Engine HTTP API 查询容器、镜像、运行状态、详情、启停/重启、最近 N 行日志及持续跟踪日志。
+- Docker：SSH 隧道访问远程 Linux 的 Unix Socket，再通过 Docker Engine HTTP API 查询容器、镜像、网络、存储卷、运行状态、详情、启停/重启、最近 N 行日志及持续跟踪日志。
+- Docker 资源管理：镜像 / 网络 / 存储卷独立视图（列表、详情、新建网络与存储卷、删除）。容器操作（启动/停止/重启）与资源删除分开，删除需二次确认。
 - Docker Compose：直接读取 Engine 容器的 `com.docker.compose.project` / `.service` 标签，对容器按项目分组；支持项目中的容器级操作。**不执行 `compose up/down`**。
 - Kubernetes：官方 `KubernetesClient` 从 kubeconfig 读取当前或指定 context，列举所有 namespace 的 Pod/容器、Pod JSON 详情、流式日志；不执行工作负载写操作。
 - 通用：多连接、本地搜索、日志导出、自动取消上一批请求、日志长度限制。
+- 日志：关键字过滤并高亮命中内容（保存的是当前过滤后的视图）、Esc 清除过滤条件。
 - 界面：列头点击排序、双击行查看详情、F5 刷新、Ctrl+F 聚焦搜索、Esc 清空搜索；刷新时保留上次数据直至新数据到达，加载期间禁用重复提交；窗口标题与状态栏显示当前连接。
+- 记忆：窗口大小/位置与上次保存日志的目录保存在 `%APPDATA%\DockerManager\settings.json`，启动时恢复（越界或损坏时回退默认值）。
 - SSH 连接按“用户@主机:端口/Socket 路径”复用：同一连接的多次操作（Compose 刷新、详情+日志）只做一次握手，空闲 5 分钟后自动断开；失败或取消的会话不会复用。
 
 ## 连接要求
