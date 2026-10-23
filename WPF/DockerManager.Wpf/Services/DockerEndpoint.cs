@@ -18,6 +18,9 @@ public static class DockerEndpoint
         return uri;
     }
 
+    /// <summary>The ssh scheme has no registered default port, so an omitted port parses as -1.</summary>
+    public static int Port(Uri uri) => uri.IsDefaultPort || uri.Port < 0 ? 22 : uri.Port;
+
     public static string SocketPath(ConnectionProfile profile)
     {
         var path = string.IsNullOrWhiteSpace(profile.DockerSocketPath)

@@ -28,7 +28,7 @@ public sealed class DockerApiClient : IDisposable
     private async Task<Session> RentAsync(ConnectionProfile profile, CancellationToken ct)
     {
         var endpoint = DockerEndpoint.Parse(profile);
-        var key = $"{Uri.UnescapeDataString(endpoint.UserInfo).ToLowerInvariant()}@{endpoint.Host}:{endpoint.Port}" +
+        var key = $"{Uri.UnescapeDataString(endpoint.UserInfo).ToLowerInvariant()}@{endpoint.Host}:{DockerEndpoint.Port(endpoint)}" +
                   $"/{DockerEndpoint.SocketPath(profile)}";
         return await _sessions.RentAsync(key, token => ConnectAsync(profile, key, token), ct);
     }
@@ -43,8 +43,9 @@ public sealed class DockerApiClient : IDisposable
     private async Task<Session> ConnectAsync(ConnectionProfile profile, string key, CancellationToken ct)
     {
         var endpoint = DockerEndpoint.Parse(profile);
+        var port = DockerEndpoint.Port(endpoint);
         var destination = $"{Uri.UnescapeDataString(endpoint.UserInfo)}@{endpoint.Host}" +
-                          (endpoint.IsDefaultPort ? "" : $":{endpoint.Port}");
+                          (port == 22 ? "" : $":{port}");
         HostAuthentication verify = async (context, token) =>
         {
             // Tmds.Ssh 0.26.0 uses HostAuthenticationContext + CancellationToken.
@@ -54,7 +55,7 @@ public sealed class DockerApiClient : IDisposable
             try
             {
                 return await _trustStore.VerifyAsync(
-                    endpoint.Host, endpoint.Port, context.KnownHostResult,
+                    endpoint.Host, port, context.KnownHostResult,
                     context.ConnectionInfo.ServerKey.Key.SHA256FingerPrint,
                     token, allowInteraction: interactive);
             }
@@ -65,7 +66,18 @@ public sealed class DockerApiClient : IDisposable
         };
         // Read the OpenSSH user configuration (~/.ssh/config) so IdentityFile, Port, ProxyJump and
         // StrictHostKeyChecking behave like the ssh command line. Missing files are ignored.
-        var config = new SshConfigSettings { HostAuthentication = verify, AutoConnect = false };
+        var config = new SshConfigSettings
+        {
+            HostAuthentication = verify,
+            AutoConnect = false,
+            PostConfigure = context =>
+            {
+                // A desktop app has no usable console. With redirected pipes the library would
+                // downgrade the connection to batch mode and the host key confirmation
+                // could never be shown, so force interactive authentication.
+                context.Settings.EnableBatchModeWhenConsoleIsRedirected = false;
+            }
+        };
         var ssh = new SshClient(destination, config);
         try
         {
@@ -82,7 +94,7 @@ public sealed class DockerApiClient : IDisposable
                 BaseAddress = new Uri("http://docker.internal/"),
                 Timeout = Timeout.InfiniteTimeSpan // Streaming requests must not time out after 100 seconds.
             };
-            var session = new Session(ssh, http) { Key = key };
+            var session = new Session(ssh, http) { Key = $"{Uri.UnescapeDataString(endpoint.UserInfo).ToLowerInvariant()}@{endpoint.Host}:{port}/{path}" };
             try
             {
                 using var version = await session.RequestAsync(HttpMethod.Get, "version", ct);

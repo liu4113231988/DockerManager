@@ -12,6 +12,9 @@ static void Expect(bool assertion, string message)
 var ssh = new ConnectionProfile { Kind = ConnectionKind.DockerSsh, DockerHost = "ssh://tester@example.org:2222" };
 var uri = DockerEndpoint.Parse(ssh);
 Expect(uri.Host == "example.org" && uri.Port == 2222 && uri.UserInfo == "tester", "SSH endpoint parser");
+Expect(DockerEndpoint.Port(uri) == 2222, "explicit port is kept");
+var defaultPortUri = DockerEndpoint.Parse(new ConnectionProfile { Kind = ConnectionKind.DockerSsh, DockerHost = "ssh://tester@example.org" });
+Expect(DockerEndpoint.Port(defaultPortUri) == 22, "omitted port falls back to 22 instead of -1");
 Expect(DockerEndpoint.SocketPath(ssh) == "/var/run/docker.sock", "default Unix socket");
 Expect(DockerEndpoint.ChooseVersion("1.55", "1.44") == "v1.44", "new Engine API negotiated");
 Expect(DockerEndpoint.ChooseVersion("1.39", "1.24") == "v1.39", "old Engine API negotiated");
