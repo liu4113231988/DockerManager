@@ -33,6 +33,19 @@ Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作�
 4. **提示“SSH 主机密钥已变化”**：说明服务器当前密钥与本机已记录的不同（本程序记录的指纹，或 `~/.ssh/known_hosts` 里的记录）。常见原因是服务器重装/重建、镜像恢复，或该 IP 现在指向另一台机器，也可能是中间人攻击。核对一致后点“是”，程序会替换保存的指纹并继续连接；之后可执行 `ssh-keygen -R <主机>` 清理 OpenSSH 的旧记录（只影响命令行 `ssh`，不影响本程序）。
 5. 若选择“否”，连接会被拒绝并在错误框里显示服务器当前指纹与恢复步骤；下次连接会再次询问，不会自动放行。`@revoked` 标记的密钥始终无法通过，需管理员更换服务器密钥。程序已显式关闭“控制台重定向时进入批处理模式”的库默认行为，因此无论从终端、脚本还是快捷方式启动，首次连接都会正常弹出指纹确认。
 
+### 连接报 `Failed to open channel - ConnectFailed - open failed`
+
+这不是账号或网络问题：SSH 已经登录成功，是**服务器上那个 Docker Socket 打不开**。程序会在这时用一条只读命令探测主机（`[ -S ]` 判断 socket、`-r/-w` 判断权限），把结论直接写进错误框，例如：
+
+- `· /var/run/docker.sock 不存在。` → 目标主机没装 Docker，或 Socket 在别处（rootless Docker 通常在 `/run/user/<uid>/docker.sock`）。
+- `· 存在，但当前账号没有读写权限。` → `sudo usermod -aG docker <账号>` 后重新登录。
+- `· 存在且可读写，但连接被拒绝。` → Docker 服务没运行，`sudo systemctl start docker`。
+- `· 检测到可用的 Socket：/run/user/1000/docker.sock` → 若配置的路径根本不存在且只找到一个可用 Socket，程序会**自动改用它**并写回连接配置（状态栏会提示“Socket 已自动改为 …”）。
+
+如果错误里出现 `AdministrativelyProhibited`，是 sshd 关闭了 Unix Socket 转发（`AllowStreamLocalForwarding no`）；出现 `UnknownChannelType`，多半不是 OpenSSH 官方 sshd（或中间有改写通道的网关），这种情况下无法通过 SSH 直连 Docker。
+
+**注意**：错误消息末尾的 `(docker.internal:80)` 是程序内部 HTTP 客户端的占位主机名，不是你的服务器地址，可以忽略。
+
 ## 下载与运行
 
 GitHub Actions 工作流 `WPF Windows Build` 在 Windows 上运行编译、基础测试，并发布自包含单文件 EXE 构建附件。成功后在 Actions 的对应运行记录中下载 `DockerManager-win-x64`；解压运行 `DockerManager.exe`。

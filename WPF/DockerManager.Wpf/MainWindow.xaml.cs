@@ -185,6 +185,19 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowError("保存连接配置失败。", ex); }
     }
 
+    /// <summary>
+    /// The client swaps in another socket when the configured one is missing on the server.
+    /// Persist that so the next connection skips the diagnosis.
+    /// </summary>
+    private string? AdoptDiscoveredSocket(ConnectionProfile profile)
+    {
+        if (_client.DiscoveredSocket is not { } socket ||
+            string.Equals(socket, profile.DockerSocketPath, StringComparison.Ordinal)) return null;
+        profile.DockerSocketPath = socket;
+        SaveProfiles();
+        return socket;
+    }
+
     private void AddConnection_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ConnectionDialog { Owner = this };
@@ -459,11 +472,13 @@ public partial class MainWindow : Window
             ct.ThrowIfCancellationRequested();
             if (Profile?.Id != profile.Id || _view != selectedView) return;
             _savedPasswordUsed = null;
-            StatusBox.Text = selectedView == ViewKind.Compose
+            var adopted = AdoptDiscoveredSocket(profile);
+            var socketNote = adopted is null ? "" : $"（Socket 已自动改为 {adopted}）";
+            StatusBox.Text = (selectedView == ViewKind.Compose
                 ? ProjectBox.Items.Count == 0
                     ? "未发现 Compose 项目"
                     : $"Compose 项目：{(ProjectBox.SelectedItem as ComposeProject)?.Name}（{_items.Count} 个容器）"
-                : $"已连接：{profile.Name}";
+                : $"已连接：{profile.Name}") + socketNote;
             ApplyFilter();
         }
         catch (OperationCanceledException) { /* A newer selection took over. */ }
@@ -545,8 +560,11 @@ public partial class MainWindow : Window
             var result = await _client.TestAsync(profile, ct);
             if (ct.IsCancellationRequested) return;
             _savedPasswordUsed = null;
+            var adopted = AdoptDiscoveredSocket(profile);
             StatusBox.Text = "测试连接成功";
-            MessageBox.Show(this, "连接成功！\n" + result, "连接测试", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "连接成功！\n" + result +
+                (adopted is null ? "" : $"\n\n配置的 Socket 路径在该服务器上不存在，已自动改用 {adopted} 并保存到连接配置。"),
+                "连接测试", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!ct.IsCancellationRequested) ShowError("连接测试失败。", ex); }

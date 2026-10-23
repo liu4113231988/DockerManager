@@ -33,7 +33,7 @@
       <TextBlock x:Name="ConfigLabel" Text="远端 Docker Socket 路径" Margin="0,0,0,5"/>
       <TextBox x:Name="ConfigBox" Text="/var/run/docker.sock"/>
     </StackPanel>
-    <TextBlock Grid.Row="5" Text="提示：SSH 使用本机 ~/.ssh 密钥与 known_hosts，服务器 SSH 必须允许 Unix Socket 转发；K8s 支持证书/Token，不执行外部认证命令。"
+    <TextBlock Grid.Row="5" Text="提示：SSH 使用本机 ~/.ssh 密钥与 known_hosts，服务器 SSH 必须允许 Unix Socket 转发。默认为 /var/run/docker.sock；rootless Docker 一般是 /run/user/&lt;uid&gt;/docker.sock。路径填错时程序会自动探测可用 Socket。"
                Foreground="#64748B" TextWrapping="Wrap"/>
     <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
       <Button Content="取消" Width="90" Click="Cancel_Click"/>

@@ -278,6 +278,55 @@ Expect(idle.Disposed, "recycled session is disposed");
 pool.Clear();
 idlePool.Clear();
 
+// Remote socket diagnosis: the SSH channel error is identical for a missing socket,
+// a stopped daemon and a permission error, so it must be explained from a probe.
+Expect(DockerSocketProbe.IsChannelOpenFailure(new Exception("Failed to open channel - ConnectFailed - open failed.")),
+    "channel open failure is recognized");
+Expect(!DockerSocketProbe.IsChannelOpenFailure(new Exception("AuthenticationFailed")),
+    "other connection failures are not socket channel failures");
+Expect(DockerSocketProbe.IsChannelOpenFailure(new InvalidOperationException("wrap",
+        new Exception("Failed to open channel - ConnectFailed - open failed."))),
+    "wrapped channel failure is recognized");
+try
+{
+    DockerEndpoint.SocketPath(new ConnectionProfile { Kind = ConnectionKind.DockerSsh, DockerSocketPath = "var/run/docker.sock" });
+    throw new Exception("relative socket path should be rejected");
+}
+catch (ArgumentException) { Console.WriteLine("PASS reject relative socket path"); }
+
+var probeCommand = DockerSocketProbe.BuildCommand("/opt/odd path's.sock");
+Expect(probeCommand.Contains("'/opt/odd path'\\''s.sock'"), "configured socket path is shell-quoted");
+Expect(probeCommand.Contains("/run/user/[0-9]*/docker.sock"), "probe covers rootless sockets and keeps globs unquoted");
+Expect(DockerSocketProbe.Parse("USABLE /var/run/docker.sock\nDENIED /run/user/1000/docker.sock\nnoise\n" +
+        "USABLE /var/run/docker.sock\n").Usable.SequenceEqual(["/var/run/docker.sock"]),
+    "probe output lists usable sockets once and ignores noise");
+Expect(DockerSocketProbe.Parse("DENIED /run/user/1000/docker.sock").Denied.SequenceEqual(["/run/user/1000/docker.sock"]),
+    "probe output lists denied sockets");
+
+var missingSocket = DockerSocketProbe.BuildMessage("/var/run/docker.sock", "10.1.2.3",
+    "Failed to open channel - ConnectFailed - open failed.",
+    new DockerSocketProbeResult { Usable = ["/run/user/1000/docker.sock"] });
+Expect(missingSocket.Contains("/var/run/docker.sock") && missingSocket.Contains("10.1.2.3"),
+    "socket message names the path and the host");
+Expect(missingSocket.Contains("不存在") && missingSocket.Contains("/run/user/1000/docker.sock"),
+    "socket message points at the discovered socket");
+
+Expect(DockerSocketProbe.BuildMessage("/var/run/docker.sock", "h",
+        "Failed to open channel - ConnectFailed - open failed.",
+        new DockerSocketProbeResult { Denied = ["/var/run/docker.sock"] })
+        .Contains("usermod -aG docker"), "permission problem suggests the docker group");
+Expect(DockerSocketProbe.BuildMessage("/var/run/docker.sock", "h",
+        "Failed to open channel - ConnectFailed - open failed.",
+        new DockerSocketProbeResult { Usable = ["/var/run/docker.sock"] })
+        .Contains("systemctl start docker"), "stopped daemon suggests starting Docker");
+var prohibited = DockerSocketProbe.BuildMessage("/var/run/docker.sock", "h",
+    "Failed to open channel - AdministrativelyProhibited - open failed.", null);
+Expect(prohibited.Contains("AllowStreamLocalForwarding"), "disallowed forwarding explains sshd_config");
+Expect(prohibited.Contains("ls -l /var/run/docker.sock"), "unavailable probe falls back to manual commands");
+Expect(DockerSocketProbe.BuildMessage("/var/run/docker.sock", "h",
+        "Failed to open channel - UnknownChannelType - unknown channel type.", null)
+        .Contains("direct-streamlocal@openssh.com"), "unsupported channel type is explained");
+
 Console.WriteLine("All DockerManager managed-API smoke tests passed.");
 
 sealed class PooledFake(string name) : IPooledResource, IDisposable

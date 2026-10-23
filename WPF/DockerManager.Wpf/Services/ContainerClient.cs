@@ -22,6 +22,9 @@ public sealed class ContainerClient : IDisposable
         set => _docker.PromptPassword = value;
     }
 
+    /// <summary>An accessible socket that replaced a missing configured path during the last connect.</summary>
+    public string? DiscoveredSocket => _docker.DiscoveredSocket;
+
     public Task<string> TestAsync(ConnectionProfile profile, CancellationToken ct) =>
         profile.Kind == ConnectionKind.Kubernetes ? _kubernetes.TestAsync(profile, ct) : _docker.TestAsync(profile, ct);
 

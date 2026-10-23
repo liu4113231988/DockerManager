@@ -24,6 +24,12 @@ public sealed class DockerApiClient : IDisposable
     /// <summary>Per-session password prompt. Returning null cancels the connection; passwords are never stored.</summary>
     public Func<string, CancellationToken, Task<string?>>? PromptPassword { get; set; }
 
+    /// <summary>
+    /// Set when the configured socket was missing and an accessible one was found on the server.
+    /// The UI persists it into the profile so later connections skip the diagnosis.
+    /// </summary>
+    public string? DiscoveredSocket { get; private set; }
+
     public void Dispose() => _sessions.Clear();
 
     // A healthy session is reused, so a Compose refresh (projects + containers) or a log
@@ -92,7 +98,10 @@ public sealed class DockerApiClient : IDisposable
         try
         {
             await ssh.ConnectAsync(ct);
-            var path = DockerEndpoint.SocketPath(profile);
+            // Open the socket channel explicitly: a refusal here is a server-side socket problem,
+            // and the library's raw message ("Failed to open channel - ConnectFailed - open failed.")
+            // cannot be understood without probing the host.
+            var path = await ResolveSocketAsync(ssh, profile, endpoint.Host, ct);
             var handler = new SocketsHttpHandler
             {
                 UseProxy = false,
@@ -104,7 +113,8 @@ public sealed class DockerApiClient : IDisposable
                 BaseAddress = new Uri("http://docker.internal/"),
                 Timeout = Timeout.InfiniteTimeSpan // Streaming requests must not time out after 100 seconds.
             };
-            var session = new Session(ssh, http) { Key = $"{Uri.UnescapeDataString(endpoint.UserInfo).ToLowerInvariant()}@{endpoint.Host}:{port}/{path}" };
+            // Reuse the rent key so a socket fallback cannot orphan a pooled session under another key.
+            var session = new Session(ssh, http) { Key = key };
             try
             {
                 using var version = await session.RequestAsync(HttpMethod.Get, "version", ct);
@@ -119,6 +129,67 @@ public sealed class DockerApiClient : IDisposable
             catch { session.Dispose(); throw; }
         }
         catch { ssh.Dispose(); throw; }
+    }
+
+    /// <summary>
+    /// Opens the Docker socket channel before the HTTP layer exists, so a refusal is reported as a
+    /// socket problem instead of a request error. When the configured path is simply absent and
+    /// exactly one accessible socket exists, that one is used and reported via
+    /// <see cref="DiscoveredSocket"/>.
+    /// </summary>
+    private async Task<string> ResolveSocketAsync(SshClient ssh, ConnectionProfile profile, string host, CancellationToken ct)
+    {
+        DiscoveredSocket = null;
+        var configured = DockerEndpoint.SocketPath(profile);
+        try
+        {
+            using var open = await ssh.OpenUnixConnectionAsync(configured, ct);
+            return configured;
+        }
+        catch (Exception ex) when (DockerSocketProbe.IsChannelOpenFailure(ex))
+        {
+            var result = await ProbeSocketsAsync(ssh, configured, ct);
+            var alternatives = result is null
+                ? new List<string>()
+                : result.Usable.Where(p => !string.Equals(p, configured, StringComparison.Ordinal)).ToList();
+            // Only a missing configured path plus a single accessible alternative is unambiguous.
+            if (result is not null && !result.Exists(configured) && alternatives.Count == 1)
+            {
+                try
+                {
+                    using var open = await ssh.OpenUnixConnectionAsync(alternatives[0], ct);
+                    DiscoveredSocket = alternatives[0];
+                    return alternatives[0];
+                }
+                catch (Exception retry) when (DockerSocketProbe.IsChannelOpenFailure(retry))
+                {
+                    // Fall through: the configured path is what the user has to correct.
+                }
+            }
+            throw new DockerSocketException(DockerSocketProbe.BuildMessage(configured, host, ex.Message, result));
+        }
+    }
+
+    /// <summary>Read-only probe of the usual socket locations; null when the server refuses to run commands.</summary>
+    private static async Task<DockerSocketProbeResult?> ProbeSocketsAsync(SshClient ssh, string configured, CancellationToken ct)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            using var process = await ssh.ExecuteAsync(DockerSocketProbe.BuildCommand(configured), timeout.Token);
+            var (stdout, _) = await process.ReadToEndAsStringAsync(timeout.Token);
+            return DockerSocketProbe.Parse(stdout);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch
+        {
+            // Restricted shell, exec denied, ... the diagnosis is optional, never fatal.
+            return null;
+        }
     }
 
     private sealed class Session(SshClient ssh, HttpClient http) : IDisposable, IPooledResource
