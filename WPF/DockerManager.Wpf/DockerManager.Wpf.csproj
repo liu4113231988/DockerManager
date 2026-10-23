@@ -13,5 +13,6 @@
     <PackageReference Include="Tmds.Ssh" Version="0.26.0" />
     <PackageReference Include="KubernetesClient" Version="21.0.8" />
     <PackageReference Include="YamlDotNet" Version="18.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
   </ItemGroup>
 </Project>

@@ -229,6 +229,25 @@ try
 }
 finally { if (File.Exists(settingsFile)) File.Delete(settingsFile); }
 
+// Remembered passwords are DPAPI-encrypted and never stored as plaintext.
+var credFile = Path.Combine(Path.GetTempPath(), $"dockermanager-cred-{Guid.NewGuid():N}.json");
+try
+{
+    var credentials = new CredentialStore(credFile);
+    Expect(credentials.Get("root@10.0.0.1:22") is null, "no remembered password initially");
+    credentials.Set("root@10.0.0.1:22", "s3cret-pw");
+    Expect(File.ReadAllText(credFile).Contains("s3cret-pw") == false, "remembered password is not stored as plaintext");
+    Expect(new CredentialStore(credFile).Get("root@10.0.0.1:22") == "s3cret-pw", "remembered password round trips");
+    credentials.Set("root@10.0.0.1:22", "updated");
+    Expect(new CredentialStore(credFile).Get("root@10.0.0.1:22") == "updated", "remembered password can be replaced");
+    credentials.Remove("root@10.0.0.1:22");
+    Expect(new CredentialStore(credFile).Get("root@10.0.0.1:22") is null, "removed password is gone");
+    Expect(new CredentialStore(credFile).Get("other@host") is null, "unknown keys stay empty");
+    File.WriteAllText(credFile, "{ not json");
+    Expect(new CredentialStore(credFile).Get("root@10.0.0.1:22") is null, "corrupted store falls back to empty");
+}
+finally { if (File.Exists(credFile)) File.Delete(credFile); }
+
 // Session pool: healthy connections are reused, broken or cancelled ones are discarded.
 var pool = new ResourcePool<PooledFake>(TimeSpan.FromMinutes(5));
 var created = 0;

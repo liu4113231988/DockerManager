@@ -17,7 +17,7 @@ Windows 10/11 原生桌面程序，使用 **C#、WPF、.NET 10**。底层操作�
 ## 连接要求
 
 - Docker SSH：远程主机需要 OpenSSH Server 和 Docker Engine；OpenSSH 必须允许 `direct-streamlocal` Unix Socket 访问。SSH 用户需对 `/var/run/docker.sock` 有权限，亦可自定义 Socket 路径。**该权限等价于高权限主机访问，务必使用可信账号**。
-- SSH 认证：支持公钥（默认密钥、ssh-agent、`~/.ssh/config` 的 `IdentityFile`）与**账号密码**。密码在连接时弹窗输入，仅本次会话使用，**绝不保存**；连接串中写入 `user:password@` 仍然会被拒绝。若服务器禁用密码登录（多数云主机默认 `PasswordAuthentication no`）或只允许 keyboard-interactive，密码方式不可用，请改用密钥。
+- SSH 认证：支持公钥（默认密钥、ssh-agent、`~/.ssh/config` 的 `IdentityFile`）与**账号密码**。密码在连接时弹窗输入，可勾选“记住密码”——用 Windows DPAPI 按当前用户加密保存在 `%APPDATA%\DockerManager\credentials.json`（不明文落盘），之后自动登录；服务器拒绝该密码时自动清除并重新询问。连接串中写入 `user:password@` 仍然会被拒绝。若服务器禁用密码登录（多数云主机默认 `PasswordAuthentication no`）或只允许 keyboard-interactive，密码方式不可用，请改用密钥。
 - SSH 主机指纹：使用 Tmds.Ssh 的 OpenSSH `~/.ssh/known_hosts` 校验行为，首次连接陌生服务器时，程序显示主机 SHA256 指纹，要求用户通过服务器控制台或可信管理员独立核对，并明确选择是否信任。确认后的指纹保存在 `%APPDATA%\DockerManager\trusted-ssh-hosts.json`；以后自动校验（即使 `known_hosts` 里仍留有旧记录）。指纹变化时程序会以“主机密钥已变化”警告重新征求确认，撤销（`@revoked`）的密钥一律拒绝，不会自动接受。使用本机 `~/.ssh` 默认密钥或 OpenSSH config 配置认证（`IdentityFile`、`Port`、`ProxyJump`、`StrictHostKeyChecking` 均按 `ssh` 命令行行为解析）；不把密码、私钥内容写入连接配置。**不会自动接受未知主机指纹，也不会禁用密钥校验**。
 - Kubernetes：读取已存在的 kubeconfig（默认 `%USERPROFILE%\.kube\config`）。支持标准证书/Token 方式，**故意拒绝** `exec` / `auth-provider` 外部认证机制，避免暗中启动 `gcloud`、`aws` 等 CLI。也会拒绝 `insecure-skip-tls-verify`。其他复杂认证方案、组合多个 KUBECONFIG 文件还未支持。
 - 旧版 Docker Context 已停用：升级后请重新添加 `ssh://用户名@服务器[:端口]` 的 Docker SSH 连接。

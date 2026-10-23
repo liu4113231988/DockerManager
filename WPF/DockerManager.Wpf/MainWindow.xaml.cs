@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly ProfileStore _store = new();
     private readonly ContainerClient _client = new();
     private readonly SettingsStore _settings = new();
+    private readonly CredentialStore _credentials = new();
     private readonly ObservableCollection<ConnectionProfile> _profiles = [];
     private IReadOnlyList<WorkloadItem> _items = [];
     private ViewKind _view = ViewKind.Docker;
@@ -27,6 +28,7 @@ public partial class MainWindow : Window
     private bool _sortAscending = true;
     private int _loadCount;
     private string _lastLogDirectory = "";
+    private string? _savedPasswordUsed;
     private CancellationTokenSource? _activeRequest;
     private CancellationTokenSource? _logCancellation;
     private bool _followingLogs;
@@ -146,12 +148,30 @@ public partial class MainWindow : Window
     private async Task<string?> PromptPasswordAsync(string destination, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        // A remembered password is used silently; it is cleared automatically when the server rejects it.
+        var saved = _credentials.Get(destination);
+        if (saved is not null)
+        {
+            _savedPasswordUsed = destination;
+            return saved;
+        }
         var dialog = Dispatcher.InvokeAsync(() =>
         {
             var prompt = new PasswordDialog(destination) { Owner = this };
-            return prompt.ShowDialog() == true ? prompt.Password : null;
+            return prompt.ShowDialog() == true ? prompt : null;
         });
-        return await dialog.Task.WaitAsync(ct);
+        var prompt = await dialog.Task.WaitAsync(ct);
+        if (prompt is null) return null;
+        if (prompt.Remember)
+        {
+            try
+            {
+                _credentials.Set(destination, prompt.Password);
+                _savedPasswordUsed = destination;
+            }
+            catch (Exception ex) { ShowError("保存密码失败。", ex); }
+        }
+        return prompt.Password;
     }
 
     private void SaveProfiles()
@@ -433,6 +453,7 @@ public partial class MainWindow : Window
                 _items = await _client.DockerContainersAsync(profile, ct);
             ct.ThrowIfCancellationRequested();
             if (Profile?.Id != profile.Id || _view != selectedView) return;
+            _savedPasswordUsed = null;
             StatusBox.Text = selectedView == ViewKind.Compose
                 ? ProjectBox.Items.Count == 0
                     ? "未发现 Compose 项目"
@@ -518,6 +539,7 @@ public partial class MainWindow : Window
         {
             var result = await _client.TestAsync(profile, ct);
             if (ct.IsCancellationRequested) return;
+            _savedPasswordUsed = null;
             StatusBox.Text = "测试连接成功";
             MessageBox.Show(this, "连接成功！\n" + result, "连接测试", MessageBoxButton.OK, MessageBoxImage.Information);
         }
@@ -800,16 +822,25 @@ public partial class MainWindow : Window
         }
         // Fallback: even if a library layer drops the guidance, common SSH failures stay actionable.
         var combined = string.Join("\n", messages);
+        bool authFailed = combined.Contains("AuthenticationFailed", StringComparison.OrdinalIgnoreCase) ||
+                          combined.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
+                          combined.Contains("These methods failed", StringComparison.OrdinalIgnoreCase);
+        // A remembered password that the server no longer accepts must not keep failing silently.
+        if (authFailed && _savedPasswordUsed is not null)
+        {
+            try { _credentials.Remove(_savedPasswordUsed); }
+            catch { /* best effort */ }
+            messages.Add("已清除该连接保存的密码，下次连接将重新询问。");
+            _savedPasswordUsed = null;
+        }
         if (combined.Contains("is not trusted", StringComparison.OrdinalIgnoreCase) ||
             combined.Contains("UntrustedPeer", StringComparison.OrdinalIgnoreCase))
             messages.Add("SSH 主机密钥未通过校验：请核对服务器指纹后再确认；服务器确实重装过时可执行 " +
                          "ssh-keygen -R <主机> 清除 OpenSSH 旧记录后重连。");
-        else if (combined.Contains("AuthenticationFailed", StringComparison.OrdinalIgnoreCase) ||
-                 combined.Contains("Permission denied", StringComparison.OrdinalIgnoreCase) ||
-                 combined.Contains("These methods failed", StringComparison.OrdinalIgnoreCase))
-            messages.Add("SSH 认证被拒绝：本机密钥未被服务器接受。可在连接时输入该账号的密码（仅本次使用，不会保存），" +
-                         "或把本机公钥（~/.ssh/id_*.pub）加入服务器的 ~/.ssh/authorized_keys；" +
-                         "注意如果服务器禁用了密码登录（云主机常见），只能使用密钥方式。");
+        else if (authFailed)
+            messages.Add("SSH 认证被拒绝：本机密钥未被服务器接受。可在连接时输入该账号的密码（可勾选记住，" +
+                         "以 Windows 当前用户加密保存在本机），或把本机公钥（~/.ssh/id_*.pub）加入服务器的 " +
+                         "~/.ssh/authorized_keys；注意如果服务器禁用了密码登录（云主机常见），只能使用密钥方式。");
         MessageBox.Show(this, title + "\n\n" + string.Join("\n\n", messages), "DockerManager",
             MessageBoxButton.OK, MessageBoxImage.Error);
     }
